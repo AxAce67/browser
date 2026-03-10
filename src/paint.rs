@@ -5,8 +5,6 @@ pub const CHAR_WIDTH: u32 = 8;
 pub const LINE_HEIGHT: u32 = 18;
 const H_PADDING: u32 = 16;
 const V_PADDING: u32 = 16;
-const INDENT_WIDTH: u32 = 20;
-const BLOCK_SPACING: u32 = 18;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayList {
@@ -31,6 +29,7 @@ pub enum DisplayCommand {
         text: String,
         color: Color,
         font_weight: FontWeight,
+        font_size: u32,
     },
 }
 
@@ -53,7 +52,7 @@ pub fn build_display_list(layout: &LayoutBox) -> DisplayList {
     let mut max_width = 0;
     let mut cursor_y = V_PADDING;
 
-    paint_box(layout, 0, &mut cursor_y, &mut max_width, &mut commands);
+    paint_box(layout, H_PADDING, &mut cursor_y, &mut max_width, &mut commands);
 
     DisplayList {
         width: max_width.saturating_add(H_PADDING).max(160),
@@ -87,61 +86,88 @@ pub fn parse_color(value: &str) -> Color {
 
 fn paint_box(
     layout: &LayoutBox,
-    depth: u32,
+    current_x: u32,
     cursor_y: &mut u32,
     max_width: &mut u32,
     commands: &mut Vec<DisplayCommand>,
 ) {
-    let x = H_PADDING + depth * INDENT_WIDTH;
+    *cursor_y = (*cursor_y).saturating_add(layout.style.margin.top as u32);
+    let box_x = current_x.saturating_add(layout.style.margin.left as u32);
     let start_y = *cursor_y;
+    let content_x = box_x.saturating_add(layout.style.padding.left as u32);
+    let content_y = start_y.saturating_add(layout.style.padding.top as u32);
+    let line_height = line_height_for_font(layout.style.font_size);
+    let char_width = char_width_for_font(layout.style.font_size);
+    let longest_line = layout
+        .lines
+        .iter()
+        .map(|line| line.chars().count() as u32)
+        .max()
+        .unwrap_or(0);
+    let text_width = longest_line.saturating_mul(char_width).max(u32::from(!layout.lines.is_empty()));
+    let text_height = layout.lines.len() as u32 * line_height;
 
     if !layout.lines.is_empty() {
-        let longest_line = layout
-            .lines
-            .iter()
-            .map(|line| line.chars().count() as u32)
-            .max()
-            .unwrap_or(0);
-        let text_width = (longest_line * CHAR_WIDTH).max(1);
-        let text_height = layout.lines.len() as u32 * LINE_HEIGHT;
-
         if let Some(background) = &layout.style.background_color {
             commands.push(DisplayCommand::FillRect {
-                x: x.saturating_sub(6),
-                y: start_y.saturating_sub(2),
-                width: text_width + 12,
-                height: text_height + 4,
+                x: box_x,
+                y: start_y,
+                width: text_width
+                    .saturating_add(layout.style.padding.left as u32)
+                    .saturating_add(layout.style.padding.right as u32),
+                height: text_height
+                    .saturating_add(layout.style.padding.top as u32)
+                    .saturating_add(layout.style.padding.bottom as u32),
                 color: parse_color(background),
             });
         }
 
+        *cursor_y = content_y;
         for line in &layout.lines {
             commands.push(DisplayCommand::DrawText {
-                x,
+                x: content_x,
                 y: *cursor_y,
                 text: line.clone(),
                 color: parse_color(&layout.style.color),
                 font_weight: layout.style.font_weight,
+                font_size: layout.style.font_size as u32,
             });
-            *cursor_y += LINE_HEIGHT;
+            *cursor_y += line_height;
         }
-
-        *cursor_y += 4;
-        *max_width = (*max_width).max(x + text_width + H_PADDING);
+    } else {
+        *cursor_y = content_y;
     }
 
     for child in &layout.children {
-        paint_box(child, depth + 1, cursor_y, max_width, commands);
+        paint_box(child, content_x, cursor_y, max_width, commands);
     }
 
     if !layout.lines.is_empty() || !layout.children.is_empty() {
-        *cursor_y += BLOCK_SPACING;
+        *cursor_y = (*cursor_y).saturating_add(layout.style.padding.bottom as u32);
+        *cursor_y = (*cursor_y).saturating_add(layout.style.margin.bottom as u32);
     }
+
+    let painted_width = box_x
+        .saturating_add(text_width)
+        .saturating_add(layout.style.padding.left as u32)
+        .saturating_add(layout.style.padding.right as u32);
+    *max_width = (*max_width).max(painted_width.saturating_add(H_PADDING));
+}
+
+fn char_width_for_font(font_size: usize) -> u32 {
+    ((font_size as f32) * 0.56).round().max(8.0) as u32
+}
+
+fn line_height_for_font(font_size: usize) -> u32 {
+    ((font_size as f32) * 1.35).round().max(LINE_HEIGHT as f32) as u32
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_display_list, parse_color, DisplayCommand};
+    use super::{
+        build_display_list, char_width_for_font, line_height_for_font, parse_color, DisplayCommand,
+        CHAR_WIDTH, LINE_HEIGHT,
+    };
     use crate::{html, layout, style};
 
     #[test]
@@ -167,6 +193,12 @@ mod tests {
         assert!(display_list.commands.iter().any(|command| {
             matches!(command, DisplayCommand::DrawText { text, .. } if text == "hello world")
         }));
+    }
+
+    #[test]
+    fn scales_metrics_with_font_size() {
+        assert!(char_width_for_font(32) > CHAR_WIDTH);
+        assert!(line_height_for_font(24) > LINE_HEIGHT);
     }
 
     #[test]

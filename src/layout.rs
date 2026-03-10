@@ -1,5 +1,5 @@
 use crate::dom::NodeType;
-use crate::style::{Display, FontWeight, StyledNode};
+use crate::style::{Display, EdgeSizes, FontWeight, StyledNode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutBox {
@@ -21,6 +21,9 @@ pub struct LayoutStyle {
     pub color: String,
     pub background_color: Option<String>,
     pub font_weight: FontWeight,
+    pub font_size: usize,
+    pub margin: EdgeSizes,
+    pub padding: EdgeSizes,
 }
 
 pub fn build(node: &StyledNode, max_width: usize) -> LayoutBox {
@@ -39,7 +42,13 @@ pub fn build(node: &StyledNode, max_width: usize) -> LayoutBox {
         NodeType::Element(element) => {
             let mut children = Vec::new();
             let mut lines = Vec::new();
-            let available_width = node.style.width.unwrap_or(max_width).min(max_width).max(1);
+            let box_overhead = node.style.margin.horizontal() + node.style.padding.horizontal();
+            let available_width = node
+                .style
+                .width
+                .unwrap_or_else(|| max_width.saturating_sub(box_overhead))
+                .min(max_width.saturating_sub(node.style.margin.horizontal()))
+                .max(1);
 
             for child in &node.children {
                 if child.style.display == Display::None {
@@ -79,6 +88,9 @@ fn to_layout_style(node: &StyledNode) -> LayoutStyle {
         color: node.style.color.clone(),
         background_color: node.style.background_color.clone(),
         font_weight: node.style.font_weight,
+        font_size: node.style.font_size,
+        margin: node.style.margin,
+        padding: node.style.padding,
     }
 }
 

@@ -24,8 +24,7 @@ const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
-const BODY_FONT_SIZE: f32 = 18.0;
-const HEADING_FONT_SIZE: f32 = 34.0;
+const BODY_FONT_SIZE: f32 = 16.0;
 const MAX_CONTENT_WIDTH_PX: u32 = 920;
 
 pub fn run(initial_source: &str) -> Result<(), String> {
@@ -659,6 +658,7 @@ fn rasterize(
                 text,
                 color,
                 font_weight,
+                font_size,
             } => text_rasterizer.draw_text(
                 frame,
                 width,
@@ -668,7 +668,7 @@ fn rasterize(
                 text,
                 *color,
                 *font_weight,
-                font_size_for_command(text, *font_weight) * scale as f32,
+                *font_size as f32 * scale as f32,
             ),
         }
     }
@@ -770,7 +770,7 @@ fn draw_text_fontdue(
 ) {
     let fonts = [font];
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-    let line_height = if font_size >= HEADING_FONT_SIZE {
+    let line_height = if font_size >= 28.0 {
         1.1
     } else {
         1.35
@@ -875,14 +875,6 @@ fn draw_scrollbar(
         thumb_height as i32,
         Color::rgb(122, 128, 138),
     );
-}
-
-fn font_size_for_command(text: &str, font_weight: crate::style::FontWeight) -> f32 {
-    if font_weight == crate::style::FontWeight::Bold && text.chars().count() <= 40 {
-        HEADING_FONT_SIZE
-    } else {
-        BODY_FONT_SIZE
-    }
 }
 
 fn set_pixel(frame: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: Color) {

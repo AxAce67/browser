@@ -14,7 +14,10 @@ pub struct ComputedStyle {
     pub color: String,
     pub background_color: Option<String>,
     pub font_weight: FontWeight,
+    pub font_size: usize,
     pub width: Option<usize>,
+    pub margin: EdgeSizes,
+    pub padding: EdgeSizes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +33,47 @@ pub enum FontWeight {
     Bold,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EdgeSizes {
+    pub top: usize,
+    pub right: usize,
+    pub bottom: usize,
+    pub left: usize,
+}
+
+impl EdgeSizes {
+    pub const fn zero() -> Self {
+        Self {
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
+        }
+    }
+
+    pub const fn uniform(value: usize) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub const fn vertical_horizontal(vertical: usize, horizontal: usize) -> Self {
+        Self {
+            top: vertical,
+            right: horizontal,
+            bottom: vertical,
+            left: horizontal,
+        }
+    }
+
+    pub const fn horizontal(self) -> usize {
+        self.left + self.right
+    }
+}
+
 impl ComputedStyle {
     fn initial() -> Self {
         Self {
@@ -37,7 +81,10 @@ impl ComputedStyle {
             color: "default".to_string(),
             background_color: None,
             font_weight: FontWeight::Normal,
+            font_size: 16,
             width: None,
+            margin: EdgeSizes::zero(),
+            padding: EdgeSizes::zero(),
         }
     }
 }
@@ -109,8 +156,39 @@ fn default_style(node: &Node) -> ComputedStyle {
                 _ => Display::Block,
             };
 
-            if matches!(element.tag_name.as_str(), "h1" | "h2" | "h3" | "strong") {
-                style.font_weight = FontWeight::Bold;
+            match element.tag_name.as_str() {
+                "body" => {
+                    style.margin = EdgeSizes::uniform(8);
+                }
+                "h1" => {
+                    style.font_weight = FontWeight::Bold;
+                    style.font_size = 32;
+                    style.margin = EdgeSizes {
+                        top: 20,
+                        right: 0,
+                        bottom: 16,
+                        left: 0,
+                    };
+                }
+                "h2" => {
+                    style.font_weight = FontWeight::Bold;
+                    style.font_size = 24;
+                    style.margin = EdgeSizes::vertical_horizontal(18, 0);
+                }
+                "h3" | "strong" => {
+                    style.font_weight = FontWeight::Bold;
+                    style.font_size = 18;
+                }
+                "p" => {
+                    style.margin = EdgeSizes::vertical_horizontal(12, 0);
+                }
+                "div" => {
+                    style.margin = EdgeSizes::vertical_horizontal(8, 0);
+                }
+                "a" => {
+                    style.color = "blue".to_string();
+                }
+                _ => {}
             }
         }
         NodeType::Text(_) => style.display = Display::Inline,
@@ -178,6 +256,11 @@ fn apply_declaration(style: &mut ComputedStyle, name: &str, value: &str) {
                 FontWeight::Normal
             };
         }
+        "font-size" => {
+            if let Some(font_size) = parse_font_size(value) {
+                style.font_size = font_size;
+            }
+        }
         "width" => {
             style.width = value
                 .trim()
@@ -185,7 +268,77 @@ fn apply_declaration(style: &mut ComputedStyle, name: &str, value: &str) {
                 .or(Some(value.trim()))
                 .and_then(|raw| raw.parse::<usize>().ok());
         }
+        "margin" => {
+            if let Some(edges) = parse_edge_sizes(value) {
+                style.margin = edges;
+            }
+        }
+        "padding" => {
+            if let Some(edges) = parse_edge_sizes(value) {
+                style.padding = edges;
+            }
+        }
+        "margin-top" => apply_edge_value(value, &mut style.margin.top),
+        "margin-right" => apply_edge_value(value, &mut style.margin.right),
+        "margin-bottom" => apply_edge_value(value, &mut style.margin.bottom),
+        "margin-left" => apply_edge_value(value, &mut style.margin.left),
+        "padding-top" => apply_edge_value(value, &mut style.padding.top),
+        "padding-right" => apply_edge_value(value, &mut style.padding.right),
+        "padding-bottom" => apply_edge_value(value, &mut style.padding.bottom),
+        "padding-left" => apply_edge_value(value, &mut style.padding.left),
         _ => {}
+    }
+}
+
+fn apply_edge_value(value: &str, target: &mut usize) {
+    if let Some(size) = parse_length_px(value) {
+        *target = size;
+    }
+}
+
+fn parse_length_px(value: &str) -> Option<usize> {
+    value
+        .trim()
+        .strip_suffix("px")
+        .unwrap_or(value.trim())
+        .parse::<usize>()
+        .ok()
+}
+
+fn parse_font_size(value: &str) -> Option<usize> {
+    let normalized = value.trim().to_ascii_lowercase();
+    parse_length_px(&normalized).or_else(|| match normalized.as_str() {
+        "small" => Some(14),
+        "medium" => Some(16),
+        "large" => Some(20),
+        "x-large" => Some(24),
+        "xx-large" => Some(32),
+        _ => None,
+    })
+}
+
+fn parse_edge_sizes(value: &str) -> Option<EdgeSizes> {
+    let values = value
+        .split_whitespace()
+        .map(parse_length_px)
+        .collect::<Option<Vec<_>>>()?;
+
+    match values.as_slice() {
+        [all] => Some(EdgeSizes::uniform(*all)),
+        [vertical, horizontal] => Some(EdgeSizes::vertical_horizontal(*vertical, *horizontal)),
+        [top, horizontal, bottom] => Some(EdgeSizes {
+            top: *top,
+            right: *horizontal,
+            bottom: *bottom,
+            left: *horizontal,
+        }),
+        [top, right, bottom, left] => Some(EdgeSizes {
+            top: *top,
+            right: *right,
+            bottom: *bottom,
+            left: *left,
+        }),
+        _ => None,
     }
 }
 
@@ -209,7 +362,7 @@ fn collect_style_text(node: &Node, output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_stylesheets, style_tree, Display, FontWeight};
+    use super::{collect_stylesheets, style_tree, Display, EdgeSizes, FontWeight};
     use crate::dom::{Node, NodeType};
 
     #[test]
@@ -233,7 +386,7 @@ mod tests {
                 <style>
                   #hero { color: blue; }
                   .accent { background-color: yellow; }
-                  p { width: 12px; }
+                  p { width: 12px; font-size: 20px; margin: 10px 4px; padding: 6px; }
                 </style>
               </head>
               <body>
@@ -254,6 +407,17 @@ mod tests {
         assert_eq!(paragraph.style.color, "blue");
         assert_eq!(paragraph.style.background_color.as_deref(), Some("yellow"));
         assert_eq!(paragraph.style.width, Some(12));
+        assert_eq!(paragraph.style.font_size, 20);
+        assert_eq!(
+            paragraph.style.margin,
+            EdgeSizes {
+                top: 10,
+                right: 4,
+                bottom: 10,
+                left: 4,
+            }
+        );
+        assert_eq!(paragraph.style.padding, EdgeSizes::uniform(6));
     }
 
     #[test]
