@@ -33,6 +33,7 @@ pub fn run(initial_source: &str) -> Result<(), String> {
         initial_source,
         DEFAULT_VIEWPORT_WIDTH,
         DEFAULT_VIEWPORT_HEIGHT,
+        1.0,
     )?;
     let event_loop =
         EventLoop::new().map_err(|err| format!("failed to create event loop: {err}"))?;
@@ -55,6 +56,7 @@ struct GuiApp {
     viewport_width: u32,
     viewport_height: u32,
     content_scale: u32,
+    window_scale_factor: f64,
     scroll_y: u32,
     modifiers: ModifiersState,
     cursor_position: Option<PhysicalPosition<f64>>,
@@ -79,7 +81,8 @@ impl GuiApp {
             pixels: None,
             viewport_width,
             viewport_height,
-            content_scale: content_scale_for_viewport(viewport_width, viewport_height),
+            content_scale: content_scale_for_viewport(viewport_width, viewport_height, 1.0),
+            window_scale_factor: 1.0,
             scroll_y: 0,
             modifiers: ModifiersState::empty(),
             cursor_position: None,
@@ -99,6 +102,7 @@ impl GuiApp {
             frame,
             self.viewport_width,
             self.viewport_height,
+            self.content_scale,
             &self.address_input,
             &self.preedit_text,
             self.address_focus,
@@ -133,11 +137,16 @@ impl GuiApp {
     }
 
     fn relayout_current_page(&mut self) {
-        self.content_scale = content_scale_for_viewport(self.viewport_width, self.viewport_height);
+        self.content_scale = content_scale_for_viewport(
+            self.viewport_width,
+            self.viewport_height,
+            self.window_scale_factor,
+        );
         self.page.display_list = build_page_display_list(
             &self.page.html_input,
             self.viewport_width,
             self.viewport_height,
+            self.window_scale_factor,
         );
         self.scroll_y = clamp_scroll(
             self.scroll_y,
@@ -147,7 +156,12 @@ impl GuiApp {
     }
 
     fn navigate(&mut self, source_input: String) {
-        match load_page(&source_input, self.viewport_width, self.viewport_height) {
+        match load_page(
+            &source_input,
+            self.viewport_width,
+            self.viewport_height,
+            self.window_scale_factor,
+        ) {
             Ok(page) => {
                 self.page = page;
                 self.current_source = source_input.clone();
@@ -170,13 +184,18 @@ impl GuiApp {
     fn content_viewport_height(&self) -> u32 {
         let available_pixels = self
             .viewport_height
-            .saturating_sub(CHROME_HEIGHT + TOP_MARGIN * 2)
+            .saturating_sub(chrome_height(self.content_scale) + top_margin(self.content_scale) * 2)
             .max(self.content_scale);
         (available_pixels / self.content_scale).max(1)
     }
 
     fn handle_address_bar_click(&mut self, position: PhysicalPosition<f64>) {
-        let focused = address_bar_hit_test(position.x, position.y, self.viewport_width);
+        let focused = address_bar_hit_test(
+            position.x,
+            position.y,
+            self.viewport_width,
+            self.content_scale,
+        );
         if focused {
             self.set_address_focus(true);
             self.status_message = Some("Editing address".to_string());
@@ -261,6 +280,7 @@ impl ApplicationHandler for GuiApp {
         };
 
         let window_size = window.inner_size();
+        self.window_scale_factor = window.scale_factor();
         self.viewport_width = window_size.width.max(1);
         self.viewport_height = window_size.height.max(1);
         self.relayout_current_page();
@@ -341,6 +361,11 @@ impl ApplicationHandler for GuiApp {
                         return;
                     }
                 }
+                self.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.window_scale_factor = scale_factor;
+                self.relayout_current_page();
                 self.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } if !self.address_focus => {
@@ -455,17 +480,24 @@ fn load_page(
     source_input: &str,
     viewport_width: u32,
     viewport_height: u32,
+    scale_factor: f64,
 ) -> Result<PageData, String> {
     let (html_input, _) = source::load_html(Some(source_input))?;
-    let display_list = build_page_display_list(&html_input, viewport_width, viewport_height);
+    let display_list =
+        build_page_display_list(&html_input, viewport_width, viewport_height, scale_factor);
     Ok(PageData {
         html_input,
         display_list,
     })
 }
 
-fn build_page_display_list(html_input: &str, viewport_width: u32, viewport_height: u32) -> DisplayList {
-    let content_scale = content_scale_for_viewport(viewport_width, viewport_height);
+fn build_page_display_list(
+    html_input: &str,
+    viewport_width: u32,
+    viewport_height: u32,
+    scale_factor: f64,
+) -> DisplayList {
+    let content_scale = content_scale_for_viewport(viewport_width, viewport_height, scale_factor);
     let available_width = viewport_width
         .saturating_sub(SIDE_MARGIN * 2 + SCROLLBAR_WIDTH + 18)
         .min(MAX_CONTENT_WIDTH_PX)
@@ -480,12 +512,16 @@ fn build_page_display_list(html_input: &str, viewport_width: u32, viewport_heigh
     crate::paint::build_display_list(&layout)
 }
 
-fn content_scale_for_viewport(viewport_width: u32, viewport_height: u32) -> u32 {
-    if viewport_width >= 2200 || viewport_height >= 1500 {
+fn content_scale_for_viewport(viewport_width: u32, viewport_height: u32, scale_factor: f64) -> u32 {
+    let device_scale = scale_factor.round().clamp(1.0, 4.0) as u32;
+    let logical_width = (viewport_width as f64 / scale_factor.max(1.0)).round() as u32;
+    let logical_height = (viewport_height as f64 / scale_factor.max(1.0)).round() as u32;
+    let large_viewport_scale = if logical_width >= 2200 || logical_height >= 1500 {
         2
     } else {
         1
-    }
+    };
+    device_scale.saturating_mul(large_viewport_scale)
 }
 
 fn load_font(database: &Database, weight: Weight) -> Option<Font> {
@@ -522,6 +558,7 @@ fn draw_chrome(
     frame: &mut [u8],
     width: u32,
     height: u32,
+    scale: u32,
     address_input: &str,
     preedit_text: &str,
     address_focus: bool,
@@ -534,17 +571,17 @@ fn draw_chrome(
         0,
         0,
         width as i32,
-        CHROME_HEIGHT as i32,
+        chrome_height(scale) as i32,
         Color::rgb(232, 228, 220),
     );
     draw_rect(
         frame,
         width,
         height,
-        ADDRESS_BAR_PADDING as i32,
-        12,
-        width.saturating_sub(ADDRESS_BAR_PADDING * 2) as i32,
-        ADDRESS_BAR_HEIGHT as i32,
+        address_bar_padding(scale) as i32,
+        (12 * scale) as i32,
+        width.saturating_sub(address_bar_padding(scale) * 2) as i32,
+        address_bar_height(scale) as i32,
         if address_focus {
             Color::rgb(255, 255, 255)
         } else {
@@ -562,12 +599,12 @@ fn draw_chrome(
         frame,
         width,
         height,
-        (ADDRESS_BAR_PADDING + 8) as i32,
-        19,
+        (address_bar_padding(scale) + 8 * scale) as i32,
+        (19 * scale) as i32,
         &display_text,
         Color::rgb(32, 35, 40),
         crate::style::FontWeight::Normal,
-        17.0,
+        17.0 * scale as f32,
     );
 
     if let Some(message) = status_message {
@@ -575,12 +612,12 @@ fn draw_chrome(
             frame,
             width,
             height,
-            (ADDRESS_BAR_PADDING + 8) as i32,
-            48,
+            (address_bar_padding(scale) + 8 * scale) as i32,
+            (48 * scale) as i32,
             message,
             Color::rgb(96, 100, 110),
             crate::style::FontWeight::Normal,
-            11.0,
+            11.0 * scale as f32,
         );
     }
 }
@@ -596,7 +633,7 @@ fn rasterize(
 ) {
     let content_pixel_width = display_list.width.saturating_mul(scale);
     let origin_x = compute_content_origin_x(width, content_pixel_width) as i32;
-    let origin_y = (CHROME_HEIGHT + TOP_MARGIN) as i32;
+    let origin_y = (chrome_height(scale) + top_margin(scale)) as i32;
 
     for command in &display_list.commands {
         match command {
@@ -643,6 +680,7 @@ fn rasterize(
         display_list.height,
         scroll_y,
         content_viewport_height_for(height, scale),
+        scale,
     );
 }
 
@@ -799,14 +837,15 @@ fn draw_scrollbar(
     content_height: u32,
     scroll_y: u32,
     viewport_height: u32,
+    scale: u32,
 ) {
     if content_height <= viewport_height || width < 12 || viewport_height == 0 {
         return;
     }
 
-    let track_x = width.saturating_sub(14);
-    let track_y = CHROME_HEIGHT + TOP_MARGIN;
-    let track_height = height.saturating_sub(track_y + TOP_MARGIN);
+    let track_x = width.saturating_sub(scaled(14, scale));
+    let track_y = chrome_height(scale) + top_margin(scale);
+    let track_height = height.saturating_sub(track_y + top_margin(scale));
 
     draw_rect(
         frame,
@@ -814,7 +853,7 @@ fn draw_scrollbar(
         height,
         track_x as i32,
         track_y as i32,
-        SCROLLBAR_WIDTH as i32,
+        scaled(SCROLLBAR_WIDTH, scale.min(2)) as i32,
         track_height as i32,
         Color::rgb(228, 224, 214),
     );
@@ -832,7 +871,7 @@ fn draw_scrollbar(
         height,
         track_x as i32,
         (track_y + thumb_y) as i32,
-        SCROLLBAR_WIDTH as i32,
+        scaled(SCROLLBAR_WIDTH, scale.min(2)) as i32,
         thumb_height as i32,
         Color::rgb(122, 128, 138),
     );
@@ -905,17 +944,37 @@ fn compute_content_origin_x(viewport_width: u32, content_pixel_width: u32) -> u3
 
 fn content_viewport_height_for(viewport_height: u32, scale: u32) -> u32 {
     let available_pixels = viewport_height
-        .saturating_sub(CHROME_HEIGHT + TOP_MARGIN * 2)
+        .saturating_sub(chrome_height(scale) + top_margin(scale) * 2)
         .max(scale);
     (available_pixels / scale).max(1)
 }
 
-fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
-    let min_x = ADDRESS_BAR_PADDING as f64;
-    let max_x = viewport_width.saturating_sub(ADDRESS_BAR_PADDING) as f64;
-    let min_y = 12.0;
-    let max_y = (12 + ADDRESS_BAR_HEIGHT) as f64;
+fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32, scale: u32) -> bool {
+    let min_x = address_bar_padding(scale) as f64;
+    let max_x = viewport_width.saturating_sub(address_bar_padding(scale)) as f64;
+    let min_y = (12 * scale) as f64;
+    let max_y = (12 * scale + address_bar_height(scale)) as f64;
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
+}
+
+fn chrome_height(scale: u32) -> u32 {
+    scaled(CHROME_HEIGHT, scale)
+}
+
+fn top_margin(scale: u32) -> u32 {
+    scaled(TOP_MARGIN, scale)
+}
+
+fn address_bar_height(scale: u32) -> u32 {
+    scaled(ADDRESS_BAR_HEIGHT, scale)
+}
+
+fn address_bar_padding(scale: u32) -> u32 {
+    scaled(ADDRESS_BAR_PADDING, scale)
+}
+
+fn scaled(value: u32, scale: u32) -> u32 {
+    value.saturating_mul(scale.max(1))
 }
 
 fn clamp_scroll(scroll_y: u32, content_height: u32, viewport_height: u32) -> u32 {
@@ -939,8 +998,8 @@ fn apply_scroll_delta(
 #[cfg(test)]
 mod tests {
     use super::{
-        address_bar_hit_test, apply_scroll_delta, clamp_scroll, content_scale_for_viewport,
-        load_page, rasterize, TextRasterizer, CHROME_HEIGHT,
+        address_bar_hit_test, apply_scroll_delta, chrome_height, clamp_scroll,
+        content_scale_for_viewport, load_page, rasterize, top_margin, TextRasterizer,
     };
     use crate::paint::{Color, DisplayCommand, DisplayList};
 
@@ -960,20 +1019,23 @@ mod tests {
 
     #[test]
     fn scales_up_for_large_viewports() {
-        assert_eq!(content_scale_for_viewport(800, 600), 1);
-        assert_eq!(content_scale_for_viewport(1400, 900), 1);
-        assert_eq!(content_scale_for_viewport(2400, 1600), 2);
+        assert_eq!(content_scale_for_viewport(800, 600, 1.0), 1);
+        assert_eq!(content_scale_for_viewport(1400, 900, 1.0), 1);
+        assert_eq!(content_scale_for_viewport(2400, 1600, 1.0), 2);
+        assert_eq!(content_scale_for_viewport(1920, 1440, 2.0), 2);
     }
 
     #[test]
     fn detects_address_bar_hits() {
-        assert!(address_bar_hit_test(30.0, 20.0, 900));
-        assert!(!address_bar_hit_test(30.0, 90.0, 900));
+        assert!(address_bar_hit_test(30.0, 20.0, 900, 1));
+        assert!(!address_bar_hit_test(30.0, 90.0, 900, 1));
+        assert!(address_bar_hit_test(60.0, 40.0, 1800, 2));
     }
 
     #[test]
     fn rasterizes_with_scroll_offset() {
         let text_rasterizer = TextRasterizer::load();
+        let scale = 2;
         let display_list = DisplayList {
             width: 120,
             height: 300,
@@ -987,10 +1049,11 @@ mod tests {
             background: Color::rgb(255, 255, 255),
         };
 
-        let mut frame = vec![255_u8; (240 * 140 * 4) as usize];
-        rasterize(&text_rasterizer, &display_list, &mut frame, 240, 140, 35, 2);
+        let mut frame = vec![255_u8; (240 * 280 * 4) as usize];
+        rasterize(&text_rasterizer, &display_list, &mut frame, 240, 280, 35, scale);
 
-        let pixel_index = (((CHROME_HEIGHT + 30) * 240 + 72) * 4) as usize;
+        let pixel_y = chrome_height(scale) + top_margin(scale) + ((40 - 35) as u32 * scale) + 4;
+        let pixel_index = ((pixel_y * 240 + 72) * 4) as usize;
         assert_eq!(frame[pixel_index], 255);
         assert_eq!(frame[pixel_index + 1], 0);
         assert_eq!(frame[pixel_index + 2], 0);
@@ -998,7 +1061,8 @@ mod tests {
 
     #[test]
     fn loads_page_fixture() {
-        let page = load_page("examples/welcome.html", 960, 720).expect("fixture should load");
+        let page = load_page("examples/welcome.html", 960, 720, 1.0)
+            .expect("fixture should load");
         assert!(!page.display_list.commands.is_empty());
     }
 }
