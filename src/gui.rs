@@ -324,6 +324,12 @@ impl ApplicationHandler for GuiApp {
                             self.address_input.pop();
                             self.request_redraw();
                         }
+                        Key::Character(text)
+                            if !(self.modifiers.control_key() || self.modifiers.super_key()) =>
+                        {
+                            self.address_input.push_str(text);
+                            self.request_redraw();
+                        }
                         _ => {}
                     }
                     return;
@@ -410,9 +416,7 @@ fn build_page_display_list(html_input: &str, viewport_width: u32, viewport_heigh
 }
 
 fn content_scale_for_viewport(viewport_width: u32, viewport_height: u32) -> u32 {
-    if viewport_width >= 1700 || viewport_height >= 1200 {
-        3
-    } else if viewport_width >= 900 || viewport_height >= 700 {
+    if viewport_width >= 2200 || viewport_height >= 1500 {
         2
     } else {
         1
@@ -760,8 +764,8 @@ mod tests {
     #[test]
     fn scales_up_for_large_viewports() {
         assert_eq!(content_scale_for_viewport(800, 600), 1);
-        assert_eq!(content_scale_for_viewport(1200, 700), 2);
-        assert_eq!(content_scale_for_viewport(1800, 1200), 3);
+        assert_eq!(content_scale_for_viewport(1400, 900), 1);
+        assert_eq!(content_scale_for_viewport(2400, 1600), 2);
     }
 
     #[test]

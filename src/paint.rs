@@ -50,14 +50,14 @@ impl Color {
 
 pub fn build_display_list(layout: &LayoutBox) -> DisplayList {
     let mut commands = Vec::new();
-    let mut max_width = 640;
+    let mut max_width = 0;
     let mut cursor_y = V_PADDING;
 
     paint_box(layout, 0, &mut cursor_y, &mut max_width, &mut commands);
 
     DisplayList {
-        width: max_width.max(320),
-        height: cursor_y.saturating_add(V_PADDING).max(240),
+        width: max_width.saturating_add(H_PADDING).max(160),
+        height: cursor_y.saturating_add(V_PADDING).max(80),
         commands,
         background: Color::rgb(250, 248, 242),
     }
@@ -159,8 +159,8 @@ mod tests {
         let layout = layout::build(&styled, 40);
         let display_list = build_display_list(&layout);
 
-        assert!(display_list.width >= 320);
-        assert!(display_list.height >= 240);
+        assert!(display_list.width >= 160);
+        assert!(display_list.height >= 80);
         assert!(display_list.commands.iter().any(|command| {
             matches!(command, DisplayCommand::FillRect { .. })
         }));
