@@ -1,5 +1,6 @@
 use crate::html;
 use crate::layout;
+use crate::layout::TextMeasurer;
 use crate::paint::{Color, DisplayCommand, DisplayList, CHAR_WIDTH};
 use crate::source;
 use crate::style;
@@ -24,19 +25,20 @@ const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
-const BODY_FONT_SIZE: f32 = 16.0;
 const MAX_CONTENT_WIDTH_PX: u32 = 920;
 
 pub fn run(initial_source: &str) -> Result<(), String> {
+    let text_rasterizer = TextRasterizer::load();
     let initial_page = load_page(
         initial_source,
         DEFAULT_VIEWPORT_WIDTH,
         DEFAULT_VIEWPORT_HEIGHT,
         1.0,
+        &text_rasterizer,
     )?;
     let event_loop =
         EventLoop::new().map_err(|err| format!("failed to create event loop: {err}"))?;
-    let mut app = GuiApp::new(initial_page, initial_source);
+    let mut app = GuiApp::new(initial_page, initial_source, text_rasterizer);
     event_loop
         .run_app(&mut app)
         .map_err(|err| format!("failed to run GUI app: {err}"))
@@ -63,7 +65,7 @@ struct GuiApp {
 }
 
 impl GuiApp {
-    fn new(page: PageData, initial_source: &str) -> Self {
+    fn new(page: PageData, initial_source: &str, text_rasterizer: TextRasterizer) -> Self {
         let viewport_width = DEFAULT_VIEWPORT_WIDTH;
         let viewport_height = DEFAULT_VIEWPORT_HEIGHT;
         Self {
@@ -85,7 +87,7 @@ impl GuiApp {
             scroll_y: 0,
             modifiers: ModifiersState::empty(),
             cursor_position: None,
-            text_rasterizer: TextRasterizer::load(),
+            text_rasterizer,
         }
     }
 
@@ -146,6 +148,7 @@ impl GuiApp {
             self.viewport_width,
             self.viewport_height,
             self.window_scale_factor,
+            &self.text_rasterizer,
         );
         self.scroll_y = clamp_scroll(
             self.scroll_y,
@@ -160,6 +163,7 @@ impl GuiApp {
             self.viewport_width,
             self.viewport_height,
             self.window_scale_factor,
+            &self.text_rasterizer,
         ) {
             Ok(page) => {
                 self.page = page;
@@ -256,6 +260,36 @@ impl TextRasterizer {
                 bitmap_scale,
             );
         }
+    }
+
+    fn font_for_weight(&self, font_weight: crate::style::FontWeight) -> Option<&Font> {
+        match font_weight {
+            crate::style::FontWeight::Bold => self.bold.as_ref().or(self.regular.as_ref()),
+            crate::style::FontWeight::Normal => self.regular.as_ref().or(self.bold.as_ref()),
+        }
+    }
+
+    fn measure_text_width(
+        &self,
+        text: &str,
+        font_weight: crate::style::FontWeight,
+        font_size: usize,
+    ) -> usize {
+        let font_size = font_size.max(1) as f32;
+        if let Some(font) = self.font_for_weight(font_weight) {
+            text.chars()
+                .map(|ch| font.metrics(ch, font_size).advance_width.max(0.0))
+                .sum::<f32>()
+                .ceil() as usize
+        } else {
+            text.chars().count() * CHAR_WIDTH as usize
+        }
+    }
+}
+
+impl TextMeasurer for TextRasterizer {
+    fn measure_text(&self, text: &str, font_size: usize, font_weight: crate::style::FontWeight) -> usize {
+        self.measure_text_width(text, font_weight, font_size)
     }
 }
 
@@ -480,10 +514,16 @@ fn load_page(
     viewport_width: u32,
     viewport_height: u32,
     scale_factor: f64,
+    text_measurer: &dyn TextMeasurer,
 ) -> Result<PageData, String> {
     let (html_input, _) = source::load_html(Some(source_input))?;
-    let display_list =
-        build_page_display_list(&html_input, viewport_width, viewport_height, scale_factor);
+    let display_list = build_page_display_list(
+        &html_input,
+        viewport_width,
+        viewport_height,
+        scale_factor,
+        text_measurer,
+    );
     Ok(PageData {
         html_input,
         display_list,
@@ -495,19 +535,19 @@ fn build_page_display_list(
     viewport_width: u32,
     viewport_height: u32,
     scale_factor: f64,
+    text_measurer: &dyn TextMeasurer,
 ) -> DisplayList {
     let content_scale = content_scale_for_viewport(viewport_width, viewport_height, scale_factor);
     let available_width = viewport_width
         .saturating_sub(SIDE_MARGIN * 2 + SCROLLBAR_WIDTH + 18)
         .min(MAX_CONTENT_WIDTH_PX)
         .max(360);
-    let average_char_px = (BODY_FONT_SIZE * 0.58 * content_scale as f32).max(8.0);
-    let layout_width = ((available_width as f32 / average_char_px).floor() as usize).max(28);
+    let layout_width = (available_width / content_scale.max(1)) as usize;
 
     let document = html::parse(html_input);
     let stylesheet = style::collect_stylesheets(&document);
     let styled = style::style_tree(&document, &stylesheet);
-    let layout = layout::build(&styled, layout_width.min(120));
+    let layout = layout::build_with_measurer(&styled, layout_width.max(180), text_measurer);
     crate::paint::build_display_list(&layout)
 }
 
@@ -1053,7 +1093,8 @@ mod tests {
 
     #[test]
     fn loads_page_fixture() {
-        let page = load_page("examples/welcome.html", 960, 720, 1.0)
+        let text_rasterizer = TextRasterizer::load();
+        let page = load_page("examples/welcome.html", 960, 720, 1.0, &text_rasterizer)
             .expect("fixture should load");
         assert!(!page.display_list.commands.is_empty());
     }

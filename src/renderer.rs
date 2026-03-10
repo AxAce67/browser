@@ -23,7 +23,7 @@ fn render_box(layout: &LayoutBox, depth: usize, output: &mut String) {
     }
 
     for line in &layout.lines {
-        output.push_str(&format!("{indent}{line}\n"));
+        output.push_str(&format!("{indent}{}\n", line.text));
     }
 
     for child in &layout.children {
@@ -64,7 +64,7 @@ mod tests {
         let doc = Node::document(vec![Node::element("p", vec![Node::text("hello world")])]);
         let stylesheet = style::collect_stylesheets(&doc);
         let styled = style::style_tree(&doc, &stylesheet);
-        let rendered = render(&build(&styled, 40));
+        let rendered = render(&build(&styled, 200));
         assert!(rendered.contains("<p>"));
         assert!(rendered.contains("hello world"));
     }
@@ -76,7 +76,7 @@ mod tests {
         );
         let stylesheet = style::collect_stylesheets(&doc);
         let styled = style::style_tree(&doc, &stylesheet);
-        let rendered = render(&build(&styled, 40));
+        let rendered = render(&build(&styled, 200));
         assert!(rendered.contains("<p color=red weight=bold>"));
     }
 }

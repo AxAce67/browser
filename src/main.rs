@@ -40,7 +40,7 @@ fn main() {
     let document = html::parse(&html_input);
     let stylesheet = style::collect_stylesheets(&document);
     let styled = style::style_tree(&document, &stylesheet);
-    let layout = layout::build(&styled, 48);
+    let layout = layout::build_with_measurer(&styled, 48 * 8, &layout::MonospaceTextMeasurer);
 
     let _display_list = paint::build_display_list(&layout);
     let frame = renderer::render(&layout);

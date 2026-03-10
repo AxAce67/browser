@@ -20,7 +20,7 @@ fn renders_fixture_html() {
     let document = html::parse(&html_input);
     let stylesheet = style::collect_stylesheets(&document);
     let styled = style::style_tree(&document, &stylesheet);
-    let layout = layout::build(&styled, 48);
+    let layout = layout::build(&styled, 240);
     let frame = renderer::render(&layout);
 
     assert!(path.ends_with("examples/welcome.html"));

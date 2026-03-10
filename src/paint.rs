@@ -97,14 +97,13 @@ fn paint_box(
     let content_x = box_x.saturating_add(layout.style.padding.left as u32);
     let content_y = start_y.saturating_add(layout.style.padding.top as u32);
     let line_height = line_height_for_font(layout.style.font_size);
-    let char_width = char_width_for_font(layout.style.font_size);
-    let longest_line = layout
+    let widest_line = layout
         .lines
         .iter()
-        .map(|line| line.chars().count() as u32)
+        .map(|line| line.width as u32)
         .max()
         .unwrap_or(0);
-    let text_width = longest_line.saturating_mul(char_width).max(u32::from(!layout.lines.is_empty()));
+    let text_width = widest_line.max(u32::from(!layout.lines.is_empty()));
     let text_height = layout.lines.len() as u32 * line_height;
 
     if !layout.lines.is_empty() {
@@ -127,7 +126,7 @@ fn paint_box(
             commands.push(DisplayCommand::DrawText {
                 x: content_x,
                 y: *cursor_y,
-                text: line.clone(),
+                text: line.text.clone(),
                 color: parse_color(&layout.style.color),
                 font_weight: layout.style.font_weight,
                 font_size: layout.style.font_size as u32,
@@ -154,20 +153,13 @@ fn paint_box(
     *max_width = (*max_width).max(painted_width.saturating_add(H_PADDING));
 }
 
-fn char_width_for_font(font_size: usize) -> u32 {
-    ((font_size as f32) * 0.56).round().max(8.0) as u32
-}
-
 fn line_height_for_font(font_size: usize) -> u32 {
     ((font_size as f32) * 1.35).round().max(LINE_HEIGHT as f32) as u32
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_display_list, char_width_for_font, line_height_for_font, parse_color, DisplayCommand,
-        CHAR_WIDTH, LINE_HEIGHT,
-    };
+    use super::{build_display_list, line_height_for_font, parse_color, DisplayCommand, LINE_HEIGHT};
     use crate::{html, layout, style};
 
     #[test]
@@ -182,7 +174,7 @@ mod tests {
         );
         let stylesheet = style::collect_stylesheets(&document);
         let styled = style::style_tree(&document, &stylesheet);
-        let layout = layout::build(&styled, 40);
+        let layout = layout::build(&styled, 200);
         let display_list = build_display_list(&layout);
 
         assert!(display_list.width >= 160);
@@ -197,7 +189,6 @@ mod tests {
 
     #[test]
     fn scales_metrics_with_font_size() {
-        assert!(char_width_for_font(32) > CHAR_WIDTH);
         assert!(line_height_for_font(24) > LINE_HEIGHT);
     }
 
