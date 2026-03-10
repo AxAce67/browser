@@ -6,7 +6,7 @@ pub const LINE_HEIGHT: u32 = 18;
 const H_PADDING: u32 = 16;
 const V_PADDING: u32 = 16;
 const INDENT_WIDTH: u32 = 20;
-const BLOCK_SPACING: u32 = 10;
+const BLOCK_SPACING: u32 = 18;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayList {

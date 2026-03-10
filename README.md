@@ -16,7 +16,7 @@ Current limitations:
 - Supported declarations are `color`, `background-color`, `display`, `font-weight`, and `width`
 - GUI rendering is software-only and text is rasterized from system fonts
 - GUI scrolling is vertical only
-- GUI content is reflowed and scaled on resize, but still uses a toy renderer
+- GUI content is reflowed on resize and constrained to a readable text column
 
 This repository is intentionally starting without external dependencies so the
 core parsing and rendering flow stays explicit.

@@ -24,6 +24,9 @@ const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
+const BODY_FONT_SIZE: f32 = 18.0;
+const HEADING_FONT_SIZE: f32 = 34.0;
+const MAX_CONTENT_WIDTH_PX: u32 = 920;
 
 pub fn run(initial_source: &str) -> Result<(), String> {
     let initial_page = load_page(
@@ -465,8 +468,10 @@ fn build_page_display_list(html_input: &str, viewport_width: u32, viewport_heigh
     let content_scale = content_scale_for_viewport(viewport_width, viewport_height);
     let available_width = viewport_width
         .saturating_sub(SIDE_MARGIN * 2 + SCROLLBAR_WIDTH + 18)
-        .max(320);
-    let layout_width = ((available_width / (CHAR_WIDTH * content_scale).max(1)).max(32)) as usize;
+        .min(MAX_CONTENT_WIDTH_PX)
+        .max(360);
+    let average_char_px = (BODY_FONT_SIZE * 0.58 * content_scale as f32).max(8.0);
+    let layout_width = ((available_width as f32 / average_char_px).floor() as usize).max(28);
 
     let document = html::parse(html_input);
     let stylesheet = style::collect_stylesheets(&document);
@@ -626,7 +631,7 @@ fn rasterize(
                 text,
                 *color,
                 *font_weight,
-                16.0 * scale as f32,
+                font_size_for_command(text, *font_weight) * scale as f32,
             ),
         }
     }
@@ -727,9 +732,15 @@ fn draw_text_fontdue(
 ) {
     let fonts = [font];
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    let line_height = if font_size >= HEADING_FONT_SIZE {
+        1.1
+    } else {
+        1.35
+    };
     layout.reset(&LayoutSettings {
         x: x as f32,
         y: y as f32,
+        line_height,
         ..LayoutSettings::default()
     });
     layout.append(&fonts, &TextStyle::new(text, font_size, 0));
@@ -825,6 +836,14 @@ fn draw_scrollbar(
         thumb_height as i32,
         Color::rgb(122, 128, 138),
     );
+}
+
+fn font_size_for_command(text: &str, font_weight: crate::style::FontWeight) -> f32 {
+    if font_weight == crate::style::FontWeight::Bold && text.chars().count() <= 40 {
+        HEADING_FONT_SIZE
+    } else {
+        BODY_FONT_SIZE
+    }
 }
 
 fn set_pixel(frame: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: Color) {
