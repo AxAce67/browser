@@ -15,6 +15,7 @@ pub struct ComputedStyle {
     pub background_color: Option<String>,
     pub font_weight: FontWeight,
     pub font_size: usize,
+    pub line_height: LineHeight,
     pub width: Option<usize>,
     pub margin: EdgeSizes,
     pub padding: EdgeSizes,
@@ -31,6 +32,13 @@ pub enum Display {
 pub enum FontWeight {
     Normal,
     Bold,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineHeight {
+    Normal,
+    RelativePercent(usize),
+    Px(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -82,6 +90,7 @@ impl ComputedStyle {
             background_color: None,
             font_weight: FontWeight::Normal,
             font_size: 16,
+            line_height: LineHeight::Normal,
             width: None,
             margin: EdgeSizes::zero(),
             padding: EdgeSizes::zero(),
@@ -159,10 +168,12 @@ fn default_style(node: &Node) -> ComputedStyle {
             match element.tag_name.as_str() {
                 "body" => {
                     style.margin = EdgeSizes::uniform(8);
+                    style.line_height = LineHeight::RelativePercent(155);
                 }
                 "h1" => {
                     style.font_weight = FontWeight::Bold;
                     style.font_size = 32;
+                    style.line_height = LineHeight::RelativePercent(115);
                     style.margin = EdgeSizes {
                         top: 20,
                         right: 0,
@@ -173,6 +184,7 @@ fn default_style(node: &Node) -> ComputedStyle {
                 "h2" => {
                     style.font_weight = FontWeight::Bold;
                     style.font_size = 24;
+                    style.line_height = LineHeight::RelativePercent(120);
                     style.margin = EdgeSizes::vertical_horizontal(18, 0);
                 }
                 "h3" | "strong" => {
@@ -180,9 +192,11 @@ fn default_style(node: &Node) -> ComputedStyle {
                     style.font_size = 18;
                 }
                 "p" => {
+                    style.line_height = LineHeight::RelativePercent(160);
                     style.margin = EdgeSizes::vertical_horizontal(12, 0);
                 }
                 "div" => {
+                    style.line_height = LineHeight::RelativePercent(150);
                     style.margin = EdgeSizes::vertical_horizontal(8, 0);
                 }
                 "a" => {
@@ -261,6 +275,11 @@ fn apply_declaration(style: &mut ComputedStyle, name: &str, value: &str) {
                 style.font_size = font_size;
             }
         }
+        "line-height" => {
+            if let Some(line_height) = parse_line_height(value) {
+                style.line_height = line_height;
+            }
+        }
         "width" => {
             style.width = value
                 .trim()
@@ -317,6 +336,22 @@ fn parse_font_size(value: &str) -> Option<usize> {
     })
 }
 
+fn parse_line_height(value: &str) -> Option<LineHeight> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized == "normal" {
+        return Some(LineHeight::Normal);
+    }
+    if let Some(px) = normalized.strip_suffix("px").and_then(|raw| raw.parse::<usize>().ok()) {
+        return Some(LineHeight::Px(px));
+    }
+    if let Ok(multiplier) = normalized.parse::<f32>() {
+        if multiplier.is_finite() && multiplier > 0.0 {
+            return Some(LineHeight::RelativePercent((multiplier * 100.0).round() as usize));
+        }
+    }
+    None
+}
+
 fn parse_edge_sizes(value: &str) -> Option<EdgeSizes> {
     let values = value
         .split_whitespace()
@@ -362,7 +397,7 @@ fn collect_style_text(node: &Node, output: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_stylesheets, style_tree, Display, EdgeSizes, FontWeight};
+    use super::{collect_stylesheets, style_tree, Display, EdgeSizes, FontWeight, LineHeight};
     use crate::dom::{Node, NodeType};
 
     #[test]
@@ -386,7 +421,7 @@ mod tests {
                 <style>
                   #hero { color: blue; }
                   .accent { background-color: yellow; }
-                  p { width: 12px; font-size: 20px; margin: 10px 4px; padding: 6px; }
+                  p { width: 12px; font-size: 20px; line-height: 1.7; margin: 10px 4px; padding: 6px; }
                 </style>
               </head>
               <body>
@@ -408,6 +443,7 @@ mod tests {
         assert_eq!(paragraph.style.background_color.as_deref(), Some("yellow"));
         assert_eq!(paragraph.style.width, Some(12));
         assert_eq!(paragraph.style.font_size, 20);
+        assert_eq!(paragraph.style.line_height, LineHeight::RelativePercent(170));
         assert_eq!(
             paragraph.style.margin,
             EdgeSizes {

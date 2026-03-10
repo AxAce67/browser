@@ -1,5 +1,5 @@
 use crate::layout::LayoutBox;
-use crate::style::FontWeight;
+use crate::style::{FontWeight, LineHeight};
 
 pub const CHAR_WIDTH: u32 = 8;
 pub const LINE_HEIGHT: u32 = 18;
@@ -96,7 +96,7 @@ fn paint_box(
     let start_y = *cursor_y;
     let content_x = box_x.saturating_add(layout.style.padding.left as u32);
     let content_y = start_y.saturating_add(layout.style.padding.top as u32);
-    let line_height = line_height_for_font(layout.style.font_size);
+    let line_height = line_height_for_font(layout.style.font_size, layout.style.line_height);
     let widest_line = layout
         .lines
         .iter()
@@ -153,13 +153,22 @@ fn paint_box(
     *max_width = (*max_width).max(painted_width.saturating_add(H_PADDING));
 }
 
-fn line_height_for_font(font_size: usize) -> u32 {
-    ((font_size as f32) * 1.35).round().max(LINE_HEIGHT as f32) as u32
+fn line_height_for_font(font_size: usize, line_height: LineHeight) -> u32 {
+    match line_height {
+        LineHeight::Normal => ((font_size as f32) * 1.35).round().max(LINE_HEIGHT as f32) as u32,
+        LineHeight::RelativePercent(percent) => {
+            ((font_size as f32) * (percent as f32 / 100.0))
+                .round()
+                .max(LINE_HEIGHT as f32) as u32
+        }
+        LineHeight::Px(px) => px.max(LINE_HEIGHT as usize) as u32,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{build_display_list, line_height_for_font, parse_color, DisplayCommand, LINE_HEIGHT};
+    use crate::style::LineHeight;
     use crate::{html, layout, style};
 
     #[test]
@@ -189,7 +198,8 @@ mod tests {
 
     #[test]
     fn scales_metrics_with_font_size() {
-        assert!(line_height_for_font(24) > LINE_HEIGHT);
+        assert!(line_height_for_font(24, LineHeight::Normal) > LINE_HEIGHT);
+        assert!(line_height_for_font(16, LineHeight::RelativePercent(170)) > LINE_HEIGHT);
     }
 
     #[test]

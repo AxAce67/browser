@@ -1,5 +1,5 @@
 use crate::dom::NodeType;
-use crate::style::{Display, EdgeSizes, FontWeight, StyledNode};
+use crate::style::{Display, EdgeSizes, FontWeight, LineHeight, StyledNode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutBox {
@@ -28,6 +28,7 @@ pub struct LayoutStyle {
     pub background_color: Option<String>,
     pub font_weight: FontWeight,
     pub font_size: usize,
+    pub line_height: LineHeight,
     pub margin: EdgeSizes,
     pub padding: EdgeSizes,
 }
@@ -138,6 +139,7 @@ fn to_layout_style(node: &StyledNode) -> LayoutStyle {
         background_color: node.style.background_color.clone(),
         font_weight: node.style.font_weight,
         font_size: node.style.font_size,
+        line_height: node.style.line_height,
         margin: node.style.margin,
         padding: node.style.padding,
     }

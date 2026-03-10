@@ -25,7 +25,7 @@ const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
-const MAX_CONTENT_WIDTH_PX: u32 = 920;
+const MAX_CONTENT_WIDTH_PX: u32 = 1080;
 
 pub fn run(initial_source: &str) -> Result<(), String> {
     let text_rasterizer = TextRasterizer::load();
@@ -541,7 +541,7 @@ fn build_page_display_list(
     let available_width = viewport_width
         .saturating_sub(SIDE_MARGIN * 2 + SCROLLBAR_WIDTH + 18)
         .min(MAX_CONTENT_WIDTH_PX)
-        .max(360);
+        .max(420);
     let layout_width = (available_width / content_scale.max(1)) as usize;
 
     let document = html::parse(html_input);
@@ -652,11 +652,11 @@ fn draw_chrome(
             width,
             height,
             (address_bar_padding(scale) + 8 * scale) as i32,
-            (48 * scale) as i32,
+            (47 * scale) as i32,
             message,
             Color::rgb(96, 100, 110),
             crate::style::FontWeight::Normal,
-            11.0 * scale as f32,
+            13.0 * scale as f32,
         );
     }
 }
