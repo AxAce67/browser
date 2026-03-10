@@ -14,7 +14,7 @@ Current limitations:
 
 - CSS support is limited to `tag`, `.class`, `#id`
 - Supported declarations are `color`, `background-color`, `display`, `font-weight`, and `width`
-- GUI rendering is software-only and text uses an 8x8 bitmap font
+- GUI rendering is software-only and text is rasterized from system fonts
 - GUI scrolling is vertical only
 - GUI content is reflowed and scaled on resize, but still uses a toy renderer
 

@@ -4,6 +4,8 @@ use crate::paint::{Color, DisplayCommand, DisplayList, CHAR_WIDTH};
 use crate::source;
 use crate::style;
 use font8x8::UnicodeFonts;
+use fontdb::{Database, Family, Query, Style, Weight};
+use fontdue::{Font, FontSettings};
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
@@ -52,6 +54,7 @@ struct GuiApp {
     scroll_y: u32,
     modifiers: ModifiersState,
     cursor_position: Option<PhysicalPosition<f64>>,
+    text_rasterizer: TextRasterizer,
 }
 
 impl GuiApp {
@@ -76,6 +79,7 @@ impl GuiApp {
             scroll_y: 0,
             modifiers: ModifiersState::empty(),
             cursor_position: None,
+            text_rasterizer: TextRasterizer::load(),
         }
     }
 
@@ -87,6 +91,7 @@ impl GuiApp {
         let frame = pixels.frame_mut();
         clear_frame(frame, Color::rgb(240, 236, 228));
         draw_chrome(
+            &self.text_rasterizer,
             frame,
             self.viewport_width,
             self.viewport_height,
@@ -96,6 +101,7 @@ impl GuiApp {
             self.status_message.as_deref(),
         );
         rasterize(
+            &self.text_rasterizer,
             &self.page.display_list,
             frame,
             self.viewport_width,
@@ -175,6 +181,59 @@ impl GuiApp {
             self.status_message = Some("Address bar unfocused".to_string());
         }
         self.request_redraw();
+    }
+}
+
+struct TextRasterizer {
+    regular: Option<Font>,
+    bold: Option<Font>,
+}
+
+impl TextRasterizer {
+    fn load() -> Self {
+        let mut database = Database::new();
+        database.load_system_fonts();
+
+        Self {
+            regular: load_font(&database, Weight::NORMAL),
+            bold: load_font(&database, Weight::BOLD)
+                .or_else(|| load_font(&database, Weight::NORMAL)),
+        }
+    }
+
+    fn draw_text(
+        &self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        x: i32,
+        y: i32,
+        text: &str,
+        color: Color,
+        font_weight: crate::style::FontWeight,
+        font_size: f32,
+    ) {
+        let font = match font_weight {
+            crate::style::FontWeight::Bold => self.bold.as_ref().or(self.regular.as_ref()),
+            crate::style::FontWeight::Normal => self.regular.as_ref().or(self.bold.as_ref()),
+        };
+
+        if let Some(font) = font {
+            draw_text_fontdue(frame, width, height, x, y, text, color, font, font_size);
+        } else {
+            let bitmap_scale = if font_size >= 24.0 { 2 } else { 1 };
+            draw_text_bitmap(
+                frame,
+                width,
+                height,
+                x,
+                y,
+                text,
+                color,
+                font_weight,
+                bitmap_scale,
+            );
+        }
     }
 }
 
@@ -423,6 +482,26 @@ fn content_scale_for_viewport(viewport_width: u32, viewport_height: u32) -> u32 
     }
 }
 
+fn load_font(database: &Database, weight: Weight) -> Option<Font> {
+    let query = Query {
+        families: &[Family::SansSerif],
+        weight,
+        style: Style::Normal,
+        ..Query::default()
+    };
+    let id = database.query(&query)?;
+    let font = database.with_face_data(id, |data, face_index| {
+        Font::from_bytes(
+            data.to_vec(),
+            FontSettings {
+                collection_index: face_index,
+                ..FontSettings::default()
+            },
+        )
+    })?;
+    font.ok()
+}
+
 fn clear_frame(frame: &mut [u8], color: Color) {
     for pixel in frame.chunks_exact_mut(4) {
         pixel[0] = color.r;
@@ -433,6 +512,7 @@ fn clear_frame(frame: &mut [u8], color: Color) {
 }
 
 fn draw_chrome(
+    text_rasterizer: &TextRasterizer,
     frame: &mut [u8],
     width: u32,
     height: u32,
@@ -472,7 +552,7 @@ fn draw_chrome(
         address_input,
         preedit_text
     );
-    draw_text_scaled(
+    text_rasterizer.draw_text(
         frame,
         width,
         height,
@@ -481,11 +561,11 @@ fn draw_chrome(
         &display_text,
         Color::rgb(32, 35, 40),
         crate::style::FontWeight::Normal,
-        2,
+        17.0,
     );
 
     if let Some(message) = status_message {
-        draw_text_scaled(
+        text_rasterizer.draw_text(
             frame,
             width,
             height,
@@ -494,12 +574,13 @@ fn draw_chrome(
             message,
             Color::rgb(96, 100, 110),
             crate::style::FontWeight::Normal,
-            1,
+            11.0,
         );
     }
 }
 
 fn rasterize(
+    text_rasterizer: &TextRasterizer,
     display_list: &DisplayList,
     frame: &mut [u8],
     width: u32,
@@ -535,7 +616,7 @@ fn rasterize(
                 text,
                 color,
                 font_weight,
-            } => draw_text_scaled(
+            } => text_rasterizer.draw_text(
                 frame,
                 width,
                 height,
@@ -544,7 +625,7 @@ fn rasterize(
                 text,
                 *color,
                 *font_weight,
-                scale,
+                16.0 * scale as f32,
             ),
         }
     }
@@ -583,7 +664,7 @@ fn draw_rect(
     }
 }
 
-fn draw_text_scaled(
+fn draw_text_bitmap(
     frame: &mut [u8],
     width: u32,
     height: u32,
@@ -629,6 +710,78 @@ fn draw_text_scaled(
             }
         }
         cursor_x += (CHAR_WIDTH * scale) as i32;
+    }
+}
+
+fn draw_text_fontdue(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    text: &str,
+    color: Color,
+    font: &Font,
+    font_size: f32,
+) {
+    let line_metrics = font.horizontal_line_metrics(font_size).unwrap_or(fontdue::LineMetrics {
+        ascent: font_size * 0.8,
+        descent: -font_size * 0.2,
+        line_gap: 0.0,
+        new_line_size: font_size * 1.2,
+    });
+    let baseline_y = y as f32 + line_metrics.ascent;
+    let mut cursor_x = x as f32;
+
+    for ch in text.chars() {
+        let (metrics, bitmap) = font.rasterize(ch, font_size);
+        let glyph_x = cursor_x + metrics.xmin as f32;
+        let glyph_y = baseline_y + metrics.ymin as f32 - metrics.height as f32;
+
+        draw_glyph_bitmap(
+            frame,
+            width,
+            height,
+            glyph_x.round() as i32,
+            glyph_y.round() as i32,
+            metrics.width,
+            metrics.height,
+            &bitmap,
+            color,
+        );
+
+        cursor_x += metrics.advance_width;
+    }
+}
+
+fn draw_glyph_bitmap(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    glyph_width: usize,
+    glyph_height: usize,
+    bitmap: &[u8],
+    color: Color,
+) {
+    for row in 0..glyph_height {
+        for col in 0..glyph_width {
+            let coverage = bitmap[row * glyph_width + col];
+            if coverage == 0 {
+                continue;
+            }
+
+            blend_pixel(
+                frame,
+                width,
+                height,
+                x + col as i32,
+                y + row as i32,
+                color,
+                coverage,
+            );
+        }
     }
 }
 
@@ -698,6 +851,35 @@ fn set_pixel(frame: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: C
     }
 }
 
+fn blend_pixel(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    color: Color,
+    coverage: u8,
+) {
+    if x < 0 || y < 0 {
+        return;
+    }
+
+    let x = x as u32;
+    let y = y as u32;
+    if x >= width || y >= height {
+        return;
+    }
+
+    let index = ((y * width + x) * 4) as usize;
+    if let Some(pixel) = frame.get_mut(index..index + 4) {
+        let alpha = coverage as f32 / 255.0;
+        pixel[0] = ((1.0 - alpha) * pixel[0] as f32 + alpha * color.r as f32).round() as u8;
+        pixel[1] = ((1.0 - alpha) * pixel[1] as f32 + alpha * color.g as f32).round() as u8;
+        pixel[2] = ((1.0 - alpha) * pixel[2] as f32 + alpha * color.b as f32).round() as u8;
+        pixel[3] = 0xff;
+    }
+}
+
 fn compute_content_origin_x(viewport_width: u32, content_pixel_width: u32) -> u32 {
     if viewport_width <= content_pixel_width + SIDE_MARGIN * 2 {
         SIDE_MARGIN
@@ -743,7 +925,7 @@ fn apply_scroll_delta(
 mod tests {
     use super::{
         address_bar_hit_test, apply_scroll_delta, clamp_scroll, content_scale_for_viewport,
-        load_page, rasterize, CHROME_HEIGHT,
+        load_page, rasterize, TextRasterizer, CHROME_HEIGHT,
     };
     use crate::paint::{Color, DisplayCommand, DisplayList};
 
@@ -776,6 +958,7 @@ mod tests {
 
     #[test]
     fn rasterizes_with_scroll_offset() {
+        let text_rasterizer = TextRasterizer::load();
         let display_list = DisplayList {
             width: 120,
             height: 300,
@@ -790,7 +973,7 @@ mod tests {
         };
 
         let mut frame = vec![255_u8; (240 * 140 * 4) as usize];
-        rasterize(&display_list, &mut frame, 240, 140, 35, 2);
+        rasterize(&text_rasterizer, &display_list, &mut frame, 240, 140, 35, 2);
 
         let pixel_index = (((CHROME_HEIGHT + 30) * 240 + 72) * 4) as usize;
         assert_eq!(frame[pixel_index], 255);
