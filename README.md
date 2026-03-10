@@ -50,6 +50,10 @@ GUI controls:
 - `ArrowUp` / `ArrowDown`: small scroll
 - `PageUp` / `PageDown`: page scroll
 - `Home` / `End`: jump to top/bottom
+- `Cmd+L` / `Ctrl+L`: focus address bar
+- `Enter`: load typed path or URL
+- `Esc`: cancel address editing
+- `R`: reload current page
 
 ## Test
 

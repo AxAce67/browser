@@ -30,16 +30,15 @@ fn main() {
     let stylesheet = style::collect_stylesheets(&document);
     let styled = style::style_tree(&document, &stylesheet);
     let layout = layout::build(&styled, 48);
-    let display_list = paint::build_display_list(&layout);
-
     if config.gui {
-        if let Err(message) = gui::run(display_list, &source_path.display().to_string()) {
+        if let Err(message) = gui::run(&source_path.display().to_string()) {
             eprintln!("{message}");
             std::process::exit(1);
         }
         return;
     }
 
+    let _display_list = paint::build_display_list(&layout);
     let frame = renderer::render(&layout);
     println!("Source: {}", source_path.display());
     println!("{frame}");
