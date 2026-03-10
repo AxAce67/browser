@@ -6,6 +6,7 @@ use crate::style;
 use font8x8::UnicodeFonts;
 use fontdb::{Database, Family, Query, Style, Weight};
 use fontdue::{Font, FontSettings};
+use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
@@ -724,33 +725,28 @@ fn draw_text_fontdue(
     font: &Font,
     font_size: f32,
 ) {
-    let line_metrics = font.horizontal_line_metrics(font_size).unwrap_or(fontdue::LineMetrics {
-        ascent: font_size * 0.8,
-        descent: -font_size * 0.2,
-        line_gap: 0.0,
-        new_line_size: font_size * 1.2,
+    let fonts = [font];
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    layout.reset(&LayoutSettings {
+        x: x as f32,
+        y: y as f32,
+        ..LayoutSettings::default()
     });
-    let baseline_y = y as f32 + line_metrics.ascent;
-    let mut cursor_x = x as f32;
+    layout.append(&fonts, &TextStyle::new(text, font_size, 0));
 
-    for ch in text.chars() {
-        let (metrics, bitmap) = font.rasterize(ch, font_size);
-        let glyph_x = cursor_x + metrics.xmin as f32;
-        let glyph_y = baseline_y + metrics.ymin as f32 - metrics.height as f32;
-
+    for glyph in layout.glyphs() {
+        let (metrics, bitmap) = font.rasterize_config(glyph.key);
         draw_glyph_bitmap(
             frame,
             width,
             height,
-            glyph_x.round() as i32,
-            glyph_y.round() as i32,
+            glyph.x.round() as i32,
+            glyph.y.round() as i32,
             metrics.width,
             metrics.height,
             &bitmap,
             color,
         );
-
-        cursor_x += metrics.advance_width;
     }
 }
 
