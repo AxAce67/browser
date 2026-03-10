@@ -165,7 +165,20 @@ where
 }
 
 fn normalize_whitespace(raw: &str) -> String {
-    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return collapsed;
+    }
+
+    let leading_space = raw.chars().next().is_some_and(char::is_whitespace);
+    let trailing_space = raw.chars().last().is_some_and(char::is_whitespace);
+
+    format!(
+        "{}{}{}",
+        if leading_space { " " } else { "" },
+        collapsed,
+        if trailing_space { " " } else { "" }
+    )
 }
 
 fn is_void_tag(name: &str) -> bool {
@@ -262,5 +275,13 @@ mod tests {
                 ("hidden".to_string(), String::new()),
             ]
         );
+    }
+
+    #[test]
+    fn preserves_inline_boundary_spaces() {
+        let document = parse(r#"<p>Hello <a href="/x">world</a> again</p>"#);
+        let paragraph = &document.children[0];
+        assert!(matches!(paragraph.children[0].node_type, NodeType::Text(ref text) if text == "Hello "));
+        assert!(matches!(paragraph.children[2].node_type, NodeType::Text(ref text) if text == " again"));
     }
 }

@@ -1,7 +1,10 @@
 use crate::layout::LayoutBox;
-use crate::style::{FontWeight, LineHeight};
+use crate::style::FontWeight;
+#[cfg(test)]
+use crate::style::LineHeight;
 
 pub const CHAR_WIDTH: u32 = 8;
+#[cfg(test)]
 pub const LINE_HEIGHT: u32 = 18;
 const H_PADDING: u32 = 16;
 const V_PADDING: u32 = 16;
@@ -11,7 +14,17 @@ pub struct DisplayList {
     pub width: u32,
     pub height: u32,
     pub commands: Vec<DisplayCommand>,
+    pub link_regions: Vec<LinkRegion>,
     pub background: Color,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,8 +40,11 @@ pub enum DisplayCommand {
         x: u32,
         y: u32,
         text: String,
+        width: u32,
+        line_height: u32,
         color: Color,
         font_weight: FontWeight,
+        underline: bool,
         font_size: u32,
     },
 }
@@ -49,15 +65,24 @@ impl Color {
 
 pub fn build_display_list(layout: &LayoutBox) -> DisplayList {
     let mut commands = Vec::new();
+    let mut link_regions = Vec::new();
     let mut max_width = 0;
     let mut cursor_y = V_PADDING;
 
-    paint_box(layout, H_PADDING, &mut cursor_y, &mut max_width, &mut commands);
+    paint_box(
+        layout,
+        H_PADDING,
+        &mut cursor_y,
+        &mut max_width,
+        &mut commands,
+        &mut link_regions,
+    );
 
     DisplayList {
         width: max_width.saturating_add(H_PADDING).max(160),
         height: cursor_y.saturating_add(V_PADDING).max(80),
         commands,
+        link_regions,
         background: Color::rgb(250, 248, 242),
     }
 }
@@ -90,13 +115,13 @@ fn paint_box(
     cursor_y: &mut u32,
     max_width: &mut u32,
     commands: &mut Vec<DisplayCommand>,
+    link_regions: &mut Vec<LinkRegion>,
 ) {
     *cursor_y = (*cursor_y).saturating_add(layout.style.margin.top as u32);
     let box_x = current_x.saturating_add(layout.style.margin.left as u32);
     let start_y = *cursor_y;
     let content_x = box_x.saturating_add(layout.style.padding.left as u32);
     let content_y = start_y.saturating_add(layout.style.padding.top as u32);
-    let line_height = line_height_for_font(layout.style.font_size, layout.style.line_height);
     let widest_line = layout
         .lines
         .iter()
@@ -104,7 +129,11 @@ fn paint_box(
         .max()
         .unwrap_or(0);
     let text_width = widest_line.max(u32::from(!layout.lines.is_empty()));
-    let text_height = layout.lines.len() as u32 * line_height;
+    let text_height = layout
+        .lines
+        .iter()
+        .map(|line| line.height)
+        .sum::<u32>();
 
     if !layout.lines.is_empty() {
         if let Some(background) = &layout.style.background_color {
@@ -123,22 +152,40 @@ fn paint_box(
 
         *cursor_y = content_y;
         for line in &layout.lines {
-            commands.push(DisplayCommand::DrawText {
-                x: content_x,
-                y: *cursor_y,
-                text: line.text.clone(),
-                color: parse_color(&layout.style.color),
-                font_weight: layout.style.font_weight,
-                font_size: layout.style.font_size as u32,
-            });
-            *cursor_y += line_height;
+            let mut cursor_x = content_x;
+            for fragment in &line.fragments {
+                commands.push(DisplayCommand::DrawText {
+                    x: cursor_x,
+                    y: *cursor_y,
+                    text: fragment.text.clone(),
+                    width: fragment.width as u32,
+                    line_height: line.height,
+                    color: parse_color(&fragment.color),
+                    font_weight: fragment.font_weight,
+                    underline: fragment.underline,
+                    font_size: fragment.font_size as u32,
+                });
+
+                if let Some(target) = &fragment.href {
+                    link_regions.push(LinkRegion {
+                        x: cursor_x,
+                        y: *cursor_y,
+                        width: fragment.width as u32,
+                        height: line.height,
+                        target: target.clone(),
+                    });
+                }
+
+                cursor_x = cursor_x.saturating_add(fragment.width as u32);
+            }
+            *cursor_y += line.height;
         }
     } else {
         *cursor_y = content_y;
     }
 
     for child in &layout.children {
-        paint_box(child, content_x, cursor_y, max_width, commands);
+        paint_box(child, content_x, cursor_y, max_width, commands, link_regions);
     }
 
     if !layout.lines.is_empty() || !layout.children.is_empty() {
@@ -153,6 +200,7 @@ fn paint_box(
     *max_width = (*max_width).max(painted_width.saturating_add(H_PADDING));
 }
 
+#[cfg(test)]
 fn line_height_for_font(font_size: usize, line_height: LineHeight) -> u32 {
     match line_height {
         LineHeight::Normal => ((font_size as f32) * 1.35).round().max(LINE_HEIGHT as f32) as u32,
@@ -167,7 +215,9 @@ fn line_height_for_font(font_size: usize, line_height: LineHeight) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_display_list, line_height_for_font, parse_color, DisplayCommand, LINE_HEIGHT};
+    use super::{
+        build_display_list, line_height_for_font, parse_color, DisplayCommand, LINE_HEIGHT,
+    };
     use crate::style::LineHeight;
     use crate::{html, layout, style};
 

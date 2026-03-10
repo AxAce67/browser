@@ -13,7 +13,7 @@ Current milestone:
 Current limitations:
 
 - CSS support is limited to `tag`, `.class`, `#id`
-- Supported declarations are `color`, `background-color`, `display`, `font-weight`, `font-size`, `line-height`, `width`, `margin`, `padding`, and their side-specific variants
+- Supported declarations are `color`, `background-color`, `display`, `font-weight`, `text-decoration`, `font-size`, `line-height`, `width`, `margin`, `padding`, and their side-specific variants
 - GUI rendering is software-only and text is rasterized from system fonts
 - GUI scrolling is vertical only
 - GUI content is reflowed on resize and constrained to a readable text column
@@ -48,6 +48,7 @@ cargo run -- --gui examples/welcome.html
 GUI controls:
 
 - Click address bar: focus it
+- Click link text: navigate to its `href`
 - Mouse wheel: vertical scroll
 - `ArrowUp` / `ArrowDown`: small scroll
 - `PageUp` / `PageDown`: page scroll
@@ -85,6 +86,6 @@ Right now the test set covers:
 
 ## Next steps
 
-1. Add clickable links and basic navigation history.
+1. Add basic navigation history (`Back` / `Forward`).
 2. Expand CSS support beyond simple selectors and declarations.
 3. Add a real paint pipeline with better text rendering.

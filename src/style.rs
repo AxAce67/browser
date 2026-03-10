@@ -14,6 +14,7 @@ pub struct ComputedStyle {
     pub color: String,
     pub background_color: Option<String>,
     pub font_weight: FontWeight,
+    pub underline: bool,
     pub font_size: usize,
     pub line_height: LineHeight,
     pub width: Option<usize>,
@@ -89,6 +90,7 @@ impl ComputedStyle {
             color: "default".to_string(),
             background_color: None,
             font_weight: FontWeight::Normal,
+            underline: false,
             font_size: 16,
             line_height: LineHeight::Normal,
             width: None,
@@ -201,6 +203,7 @@ fn default_style(node: &Node) -> ComputedStyle {
                 }
                 "a" => {
                     style.color = "blue".to_string();
+                    style.underline = true;
                 }
                 _ => {}
             }
@@ -269,6 +272,10 @@ fn apply_declaration(style: &mut ComputedStyle, name: &str, value: &str) {
             } else {
                 FontWeight::Normal
             };
+        }
+        "text-decoration" => {
+            let normalized = value.trim().to_ascii_lowercase();
+            style.underline = normalized.contains("underline");
         }
         "font-size" => {
             if let Some(font_size) = parse_font_size(value) {

@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use url::Url;
 
 pub const DEFAULT_SOURCE: &str = "examples/welcome.html";
 
@@ -43,9 +44,40 @@ pub fn classify_source(requested: &str) -> SourceOrigin {
     }
 }
 
+pub fn resolve_reference(current_source: &str, target: &str) -> String {
+    let trimmed = target.trim();
+    if trimmed.is_empty() {
+        return current_source.to_string();
+    }
+
+    if matches!(classify_source(trimmed), SourceOrigin::Remote(_)) {
+        return trimmed.to_string();
+    }
+
+    if let Ok(base_url) = Url::parse(current_source) {
+        return base_url
+            .join(trimmed)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| trimmed.to_string());
+    }
+
+    let target_path = Path::new(trimmed);
+    if target_path.is_absolute() {
+        return target_path.to_path_buf().display().to_string();
+    }
+
+    let current_path = Path::new(current_source);
+    current_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(target_path)
+        .display()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{classify_source, load_html, SourceOrigin, DEFAULT_SOURCE};
+    use super::{classify_source, load_html, resolve_reference, SourceOrigin, DEFAULT_SOURCE};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::{Path, PathBuf};
@@ -100,5 +132,24 @@ mod tests {
         assert_eq!(path, PathBuf::from(url));
 
         handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn resolves_local_relative_links() {
+        assert_eq!(
+            resolve_reference("examples/welcome.html", "guide/getting-started.html"),
+            PathBuf::from("examples")
+                .join("guide/getting-started.html")
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn resolves_remote_relative_links() {
+        assert_eq!(
+            resolve_reference("https://example.com/docs/index.html", "../guide"),
+            "https://example.com/guide"
+        );
     }
 }

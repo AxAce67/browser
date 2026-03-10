@@ -28,5 +28,6 @@ fn renders_fixture_html() {
     assert!(frame.contains("Toy Browser"));
     assert!(frame.contains("<p bg=beige>"));
     assert!(frame.contains("Next steps: CSS parsing"));
+    assert!(frame.contains("example.com"));
     assert!(!frame.contains("This line should stay hidden."));
 }

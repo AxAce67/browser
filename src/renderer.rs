@@ -23,7 +23,12 @@ fn render_box(layout: &LayoutBox, depth: usize, output: &mut String) {
     }
 
     for line in &layout.lines {
-        output.push_str(&format!("{indent}{}\n", line.text));
+        let line_text = line
+            .fragments
+            .iter()
+            .map(|fragment| fragment.text.as_str())
+            .collect::<String>();
+        output.push_str(&format!("{indent}{line_text}\n"));
     }
 
     for child in &layout.children {

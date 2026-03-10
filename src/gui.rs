@@ -192,7 +192,7 @@ impl GuiApp {
         (available_pixels / self.content_scale).max(1)
     }
 
-    fn handle_address_bar_click(&mut self, position: PhysicalPosition<f64>) {
+    fn handle_primary_click(&mut self, position: PhysicalPosition<f64>) {
         let focused = address_bar_hit_test(
             position.x,
             position.y,
@@ -202,6 +202,17 @@ impl GuiApp {
         if focused {
             self.set_address_focus(true);
             self.status_message = Some("Editing address".to_string());
+        } else if let Some(target) = link_hit_test(
+            &self.page.display_list,
+            position.x,
+            position.y,
+            self.viewport_width,
+            self.content_scale,
+            self.scroll_y,
+        ) {
+            let resolved = source::resolve_reference(&self.current_source, &target);
+            self.navigate(resolved);
+            return;
         } else if self.address_focus {
             self.set_address_focus(false);
             self.status_message = Some("Address bar unfocused".to_string());
@@ -355,7 +366,7 @@ impl ApplicationHandler for GuiApp {
                 ..
             } => {
                 if let Some(position) = self.cursor_position {
-                    self.handle_address_bar_click(position);
+                    self.handle_primary_click(position);
                 }
             }
             WindowEvent::Ime(event) => match event {
@@ -696,8 +707,11 @@ fn rasterize(
                 x,
                 y,
                 text,
+                width: _,
+                line_height: _,
                 color,
                 font_weight,
+                underline: _,
                 font_size,
             } => text_rasterizer.draw_text(
                 frame,
@@ -710,6 +724,29 @@ fn rasterize(
                 *font_weight,
                 *font_size as f32 * scale as f32,
             ),
+        }
+        if let DisplayCommand::DrawText {
+            x,
+            y,
+            width: text_width,
+            line_height,
+            underline: true,
+            ..
+        } = command
+        {
+            draw_rect(
+                frame,
+                width,
+                height,
+                origin_x + (*x as i32 * scale as i32),
+                origin_y
+                    + ((*y as i32 - scroll_y as i32) * scale as i32)
+                    + (*line_height as i32 * scale as i32)
+                    - (scale.min(2) as i32 * 2),
+                *text_width as i32 * scale as i32,
+                scale.min(2) as i32,
+                Color::rgb(51, 102, 204),
+            );
         }
     }
 
@@ -989,6 +1026,31 @@ fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32, scale: u32) -> bool
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
 }
 
+fn link_hit_test(
+    display_list: &DisplayList,
+    x: f64,
+    y: f64,
+    viewport_width: u32,
+    scale: u32,
+    scroll_y: u32,
+) -> Option<String> {
+    let content_pixel_width = display_list.width.saturating_mul(scale);
+    let origin_x = compute_content_origin_x(viewport_width, content_pixel_width) as f64;
+    let origin_y = (chrome_height(scale) + top_margin(scale)) as f64;
+
+    for region in &display_list.link_regions {
+        let left = origin_x + (region.x.saturating_mul(scale)) as f64;
+        let top = origin_y + (region.y.saturating_sub(scroll_y).saturating_mul(scale)) as f64;
+        let right = left + (region.width.saturating_mul(scale)) as f64;
+        let bottom = top + (region.height.saturating_mul(scale)) as f64;
+        if x >= left && x <= right && y >= top && y <= bottom {
+            return Some(region.target.clone());
+        }
+    }
+
+    None
+}
+
 fn chrome_height(scale: u32) -> u32 {
     scaled(CHROME_HEIGHT, scale)
 }
@@ -1031,9 +1093,10 @@ fn apply_scroll_delta(
 mod tests {
     use super::{
         address_bar_hit_test, apply_scroll_delta, chrome_height, clamp_scroll,
-        content_scale_for_viewport, load_page, rasterize, top_margin, TextRasterizer,
+        content_scale_for_viewport, link_hit_test, load_page, rasterize, top_margin,
+        TextRasterizer,
     };
-    use crate::paint::{Color, DisplayCommand, DisplayList};
+    use crate::paint::{Color, DisplayCommand, DisplayList, LinkRegion};
 
     #[test]
     fn clamps_scroll_to_content_height() {
@@ -1065,6 +1128,27 @@ mod tests {
     }
 
     #[test]
+    fn detects_link_hits() {
+        let display_list = DisplayList {
+            width: 240,
+            height: 120,
+            commands: Vec::new(),
+            link_regions: vec![LinkRegion {
+                x: 32,
+                y: 24,
+                width: 80,
+                height: 24,
+                target: "https://example.com".to_string(),
+            }],
+            background: Color::rgb(255, 255, 255),
+        };
+
+        let hit = link_hit_test(&display_list, 80.0, 110.0, 320, 1, 0);
+        assert_eq!(hit.as_deref(), Some("https://example.com"));
+        assert!(link_hit_test(&display_list, 10.0, 10.0, 320, 1, 0).is_none());
+    }
+
+    #[test]
     fn rasterizes_with_scroll_offset() {
         let text_rasterizer = TextRasterizer::load();
         let scale = 2;
@@ -1078,6 +1162,7 @@ mod tests {
                 height: 10,
                 color: Color::rgb(255, 0, 0),
             }],
+            link_regions: Vec::new(),
             background: Color::rgb(255, 255, 255),
         };
 
@@ -1097,5 +1182,6 @@ mod tests {
         let page = load_page("examples/welcome.html", 960, 720, 1.0, &text_rasterizer)
             .expect("fixture should load");
         assert!(!page.display_list.commands.is_empty());
+        assert!(!page.display_list.link_regions.is_empty());
     }
 }
