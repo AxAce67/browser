@@ -1,0 +1,10 @@
+[package]
+name = "browser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+font8x8 = "0.3"
+pixels = "0.15"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+winit = "0.30"
