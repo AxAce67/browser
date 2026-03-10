@@ -16,6 +16,7 @@ Current limitations:
 - Supported declarations are `color`, `background-color`, `display`, `font-weight`, and `width`
 - GUI rendering is software-only and text uses an 8x8 bitmap font
 - GUI scrolling is vertical only
+- GUI content is reflowed and scaled on resize, but still uses a toy renderer
 
 This repository is intentionally starting without external dependencies so the
 core parsing and rendering flow stays explicit.
@@ -46,6 +47,7 @@ cargo run -- --gui examples/welcome.html
 
 GUI controls:
 
+- Click address bar: focus it
 - Mouse wheel: vertical scroll
 - `ArrowUp` / `ArrowDown`: small scroll
 - `PageUp` / `PageDown`: page scroll
@@ -83,6 +85,6 @@ Right now the test set covers:
 
 ## Next steps
 
-1. Add scrolling and viewport clipping in the GUI path.
+1. Add clickable links and basic navigation history.
 2. Expand CSS support beyond simple selectors and declarations.
-3. Add a real browser chrome layer with URL input and navigation controls.
+3. Add a real paint pipeline with better text rendering.

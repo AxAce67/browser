@@ -7,18 +7,27 @@ use font8x8::UnicodeFonts;
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{ElementState, Ime, MouseScrollDelta, WindowEvent};
+use winit::dpi::{LogicalSize, PhysicalPosition};
+use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-const CHROME_HEIGHT: u32 = 52;
-const ADDRESS_BAR_HEIGHT: u32 = 28;
+const CHROME_HEIGHT: u32 = 64;
+const TOP_MARGIN: u32 = 20;
+const SIDE_MARGIN: u32 = 32;
+const SCROLLBAR_WIDTH: u32 = 10;
+const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
+const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
+const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
 
 pub fn run(initial_source: &str) -> Result<(), String> {
-    let initial_page = load_page(initial_source)?;
+    let initial_page = load_page(
+        initial_source,
+        DEFAULT_VIEWPORT_WIDTH,
+        DEFAULT_VIEWPORT_HEIGHT,
+    )?;
     let event_loop =
         EventLoop::new().map_err(|err| format!("failed to create event loop: {err}"))?;
     let mut app = GuiApp::new(initial_page, initial_source);
@@ -39,14 +48,16 @@ struct GuiApp {
     pixels: Option<Pixels<'static>>,
     viewport_width: u32,
     viewport_height: u32,
+    content_scale: u32,
     scroll_y: u32,
     modifiers: ModifiersState,
+    cursor_position: Option<PhysicalPosition<f64>>,
 }
 
 impl GuiApp {
     fn new(page: PageData, initial_source: &str) -> Self {
-        let viewport_width = page.display_list.width.clamp(520, 1200);
-        let viewport_height = (page.display_list.height + CHROME_HEIGHT).clamp(360, 800);
+        let viewport_width = DEFAULT_VIEWPORT_WIDTH;
+        let viewport_height = DEFAULT_VIEWPORT_HEIGHT;
         Self {
             title: initial_source.to_string(),
             page,
@@ -55,14 +66,16 @@ impl GuiApp {
             address_focus: false,
             preedit_text: String::new(),
             status_message: Some(
-                "Cmd/Ctrl+L to edit address, Enter to load, wheel to scroll".to_string(),
+                "Click or Cmd/Ctrl+L to edit address, Enter to load".to_string(),
             ),
             window: None,
             pixels: None,
             viewport_width,
             viewport_height,
+            content_scale: content_scale_for_viewport(viewport_width, viewport_height),
             scroll_y: 0,
             modifiers: ModifiersState::empty(),
+            cursor_position: None,
         }
     }
 
@@ -88,6 +101,7 @@ impl GuiApp {
             self.viewport_width,
             self.viewport_height,
             self.scroll_y,
+            self.content_scale,
         );
         pixels
             .render()
@@ -100,8 +114,30 @@ impl GuiApp {
         }
     }
 
+    fn set_address_focus(&mut self, focused: bool) {
+        self.address_focus = focused;
+        self.preedit_text.clear();
+        if let Some(window) = self.window.as_ref() {
+            window.set_ime_allowed(focused);
+        }
+    }
+
+    fn relayout_current_page(&mut self) {
+        self.content_scale = content_scale_for_viewport(self.viewport_width, self.viewport_height);
+        self.page.display_list = build_page_display_list(
+            &self.page.html_input,
+            self.viewport_width,
+            self.viewport_height,
+        );
+        self.scroll_y = clamp_scroll(
+            self.scroll_y,
+            self.page.display_list.height,
+            self.content_viewport_height(),
+        );
+    }
+
     fn navigate(&mut self, source_input: String) {
-        match load_page(&source_input) {
+        match load_page(&source_input, self.viewport_width, self.viewport_height) {
             Ok(page) => {
                 self.page = page;
                 self.current_source = source_input.clone();
@@ -109,13 +145,9 @@ impl GuiApp {
                 self.title = source_input;
                 self.scroll_y = 0;
                 self.status_message = Some("Page loaded".to_string());
-                self.preedit_text.clear();
-                self.address_focus = false;
+                self.set_address_focus(false);
                 if let Some(window) = self.window.as_ref() {
                     window.set_title(&format!("Toy Browser - {}", self.title));
-                }
-                if let Some(pixels) = self.pixels.as_mut() {
-                    let _ = pixels.resize_buffer(self.viewport_width, self.viewport_height);
                 }
             }
             Err(err) => {
@@ -126,7 +158,23 @@ impl GuiApp {
     }
 
     fn content_viewport_height(&self) -> u32 {
-        self.viewport_height.saturating_sub(CHROME_HEIGHT).max(1)
+        let available_pixels = self
+            .viewport_height
+            .saturating_sub(CHROME_HEIGHT + TOP_MARGIN * 2)
+            .max(self.content_scale);
+        (available_pixels / self.content_scale).max(1)
+    }
+
+    fn handle_address_bar_click(&mut self, position: PhysicalPosition<f64>) {
+        let focused = address_bar_hit_test(position.x, position.y, self.viewport_width);
+        if focused {
+            self.set_address_focus(true);
+            self.status_message = Some("Editing address".to_string());
+        } else if self.address_focus {
+            self.set_address_focus(false);
+            self.status_message = Some("Address bar unfocused".to_string());
+        }
+        self.request_redraw();
     }
 }
 
@@ -138,7 +186,7 @@ impl ApplicationHandler for GuiApp {
                 self.viewport_width as f64,
                 self.viewport_height as f64,
             ))
-            .with_min_inner_size(LogicalSize::new(420.0, 320.0));
+            .with_min_inner_size(LogicalSize::new(480.0, 360.0));
 
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
@@ -152,11 +200,7 @@ impl ApplicationHandler for GuiApp {
         let window_size = window.inner_size();
         self.viewport_width = window_size.width.max(1);
         self.viewport_height = window_size.height.max(1);
-        self.scroll_y = clamp_scroll(
-            self.scroll_y,
-            self.page.display_list.height,
-            self.content_viewport_height(),
-        );
+        self.relayout_current_page();
 
         let surface_texture =
             SurfaceTexture::new(window_size.width, window_size.height, window.clone());
@@ -169,6 +213,7 @@ impl ApplicationHandler for GuiApp {
             }
         };
 
+        window.set_ime_allowed(false);
         window.request_redraw();
         self.pixels = Some(pixels);
         self.window = Some(window);
@@ -184,6 +229,18 @@ impl ApplicationHandler for GuiApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_position = Some(position);
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state: ElementState::Pressed,
+                ..
+            } => {
+                if let Some(position) = self.cursor_position {
+                    self.handle_address_bar_click(position);
+                }
             }
             WindowEvent::Ime(event) => match event {
                 Ime::Commit(text) if self.address_focus => {
@@ -206,11 +263,8 @@ impl ApplicationHandler for GuiApp {
             WindowEvent::Resized(size) => {
                 self.viewport_width = size.width.max(1);
                 self.viewport_height = size.height.max(1);
-                self.scroll_y = clamp_scroll(
-                    self.scroll_y,
-                    self.page.display_list.height,
-                    self.content_viewport_height(),
-                );
+                self.relayout_current_page();
+
                 if let Some(pixels) = self.pixels.as_mut() {
                     if let Err(err) = pixels.resize_surface(size.width, size.height) {
                         eprintln!("failed to resize surface: {err}");
@@ -228,8 +282,10 @@ impl ApplicationHandler for GuiApp {
             }
             WindowEvent::MouseWheel { delta, .. } if !self.address_focus => {
                 let scroll_delta = match delta {
-                    MouseScrollDelta::LineDelta(_, lines) => (-(lines * 54.0)).round() as i32,
-                    MouseScrollDelta::PixelDelta(position) => -position.y.round() as i32,
+                    MouseScrollDelta::LineDelta(_, lines) => (-(lines * 18.0)).round() as i32,
+                    MouseScrollDelta::PixelDelta(position) => {
+                        -(position.y.round() as i32) / self.content_scale.max(1) as i32
+                    }
                 };
                 self.scroll_y = apply_scroll_delta(
                     self.scroll_y,
@@ -243,9 +299,8 @@ impl ApplicationHandler for GuiApp {
                 if matches!(event.logical_key.as_ref(), Key::Character(ch) if ch.eq_ignore_ascii_case("l"))
                     && (self.modifiers.control_key() || self.modifiers.super_key())
                 {
-                    self.address_focus = true;
+                    self.set_address_focus(true);
                     self.address_input = self.current_source.clone();
-                    self.preedit_text.clear();
                     self.status_message = Some("Editing address".to_string());
                     self.request_redraw();
                     return;
@@ -260,9 +315,8 @@ impl ApplicationHandler for GuiApp {
                             }
                         }
                         Key::Named(NamedKey::Escape) => {
-                            self.address_focus = false;
+                            self.set_address_focus(false);
                             self.address_input = self.current_source.clone();
-                            self.preedit_text.clear();
                             self.status_message = Some("Address edit cancelled".to_string());
                             self.request_redraw();
                         }
@@ -278,25 +332,25 @@ impl ApplicationHandler for GuiApp {
                 let next = match event.logical_key.as_ref() {
                     Key::Named(NamedKey::ArrowDown) => Some(apply_scroll_delta(
                         self.scroll_y,
-                        48,
+                        24,
                         self.page.display_list.height,
                         self.content_viewport_height(),
                     )),
                     Key::Named(NamedKey::ArrowUp) => Some(apply_scroll_delta(
                         self.scroll_y,
-                        -48,
+                        -24,
                         self.page.display_list.height,
                         self.content_viewport_height(),
                     )),
                     Key::Named(NamedKey::PageDown) => Some(apply_scroll_delta(
                         self.scroll_y,
-                        self.content_viewport_height() as i32 - 48,
+                        self.content_viewport_height() as i32 - 8,
                         self.page.display_list.height,
                         self.content_viewport_height(),
                     )),
                     Key::Named(NamedKey::PageUp) => Some(apply_scroll_delta(
                         self.scroll_y,
-                        -(self.content_viewport_height() as i32 - 48),
+                        -(self.content_viewport_height() as i32 - 8),
                         self.page.display_list.height,
                         self.content_viewport_height(),
                     )),
@@ -324,17 +378,45 @@ impl ApplicationHandler for GuiApp {
 }
 
 struct PageData {
+    html_input: String,
     display_list: DisplayList,
 }
 
-fn load_page(source_input: &str) -> Result<PageData, String> {
+fn load_page(
+    source_input: &str,
+    viewport_width: u32,
+    viewport_height: u32,
+) -> Result<PageData, String> {
     let (html_input, _) = source::load_html(Some(source_input))?;
-    let document = html::parse(&html_input);
+    let display_list = build_page_display_list(&html_input, viewport_width, viewport_height);
+    Ok(PageData {
+        html_input,
+        display_list,
+    })
+}
+
+fn build_page_display_list(html_input: &str, viewport_width: u32, viewport_height: u32) -> DisplayList {
+    let content_scale = content_scale_for_viewport(viewport_width, viewport_height);
+    let available_width = viewport_width
+        .saturating_sub(SIDE_MARGIN * 2 + SCROLLBAR_WIDTH + 18)
+        .max(320);
+    let layout_width = ((available_width / (CHAR_WIDTH * content_scale).max(1)).max(32)) as usize;
+
+    let document = html::parse(html_input);
     let stylesheet = style::collect_stylesheets(&document);
     let styled = style::style_tree(&document, &stylesheet);
-    let layout = layout::build(&styled, 48);
-    let display_list = crate::paint::build_display_list(&layout);
-    Ok(PageData { display_list })
+    let layout = layout::build(&styled, layout_width.min(120));
+    crate::paint::build_display_list(&layout)
+}
+
+fn content_scale_for_viewport(viewport_width: u32, viewport_height: u32) -> u32 {
+    if viewport_width >= 1700 || viewport_height >= 1200 {
+        3
+    } else if viewport_width >= 900 || viewport_height >= 700 {
+        2
+    } else {
+        1
+    }
 }
 
 fn clear_frame(frame: &mut [u8], color: Color) {
@@ -355,7 +437,16 @@ fn draw_chrome(
     address_focus: bool,
     status_message: Option<&str>,
 ) {
-    draw_rect(frame, width, height, 0, 0, width as i32, CHROME_HEIGHT as i32, Color::rgb(232, 228, 220));
+    draw_rect(
+        frame,
+        width,
+        height,
+        0,
+        0,
+        width as i32,
+        CHROME_HEIGHT as i32,
+        Color::rgb(232, 228, 220),
+    );
     draw_rect(
         frame,
         width,
@@ -377,27 +468,29 @@ fn draw_chrome(
         address_input,
         preedit_text
     );
-    draw_text(
+    draw_text_scaled(
         frame,
         width,
         height,
         (ADDRESS_BAR_PADDING + 8) as i32,
-        20,
+        19,
         &display_text,
         Color::rgb(32, 35, 40),
         crate::style::FontWeight::Normal,
+        2,
     );
 
     if let Some(message) = status_message {
-        draw_text(
+        draw_text_scaled(
             frame,
             width,
             height,
             (ADDRESS_BAR_PADDING + 8) as i32,
-            40,
+            48,
             message,
             Color::rgb(96, 100, 110),
             crate::style::FontWeight::Normal,
+            1,
         );
     }
 }
@@ -408,7 +501,12 @@ fn rasterize(
     width: u32,
     height: u32,
     scroll_y: u32,
+    scale: u32,
 ) {
+    let content_pixel_width = display_list.width.saturating_mul(scale);
+    let origin_x = compute_content_origin_x(width, content_pixel_width) as i32;
+    let origin_y = (CHROME_HEIGHT + TOP_MARGIN) as i32;
+
     for command in &display_list.commands {
         match command {
             DisplayCommand::FillRect {
@@ -421,10 +519,10 @@ fn rasterize(
                 frame,
                 width,
                 height,
-                *x as i32,
-                *y as i32 - scroll_y as i32 + CHROME_HEIGHT as i32,
-                *rect_width as i32,
-                *rect_height as i32,
+                origin_x + (*x as i32 * scale as i32),
+                origin_y + ((*y as i32 - scroll_y as i32) * scale as i32),
+                *rect_width as i32 * scale as i32,
+                *rect_height as i32 * scale as i32,
                 *color,
             ),
             DisplayCommand::DrawText {
@@ -433,15 +531,16 @@ fn rasterize(
                 text,
                 color,
                 font_weight,
-            } => draw_text(
+            } => draw_text_scaled(
                 frame,
                 width,
                 height,
-                *x as i32,
-                *y as i32 - scroll_y as i32 + CHROME_HEIGHT as i32,
+                origin_x + (*x as i32 * scale as i32),
+                origin_y + ((*y as i32 - scroll_y as i32) * scale as i32),
                 text,
                 *color,
                 *font_weight,
+                scale,
             ),
         }
     }
@@ -452,7 +551,7 @@ fn rasterize(
         height,
         display_list.height,
         scroll_y,
-        CHROME_HEIGHT,
+        content_viewport_height_for(height, scale),
     );
 }
 
@@ -480,7 +579,7 @@ fn draw_rect(
     }
 }
 
-fn draw_text(
+fn draw_text_scaled(
     frame: &mut [u8],
     width: u32,
     height: u32,
@@ -489,6 +588,7 @@ fn draw_text(
     text: &str,
     color: Color,
     font_weight: crate::style::FontWeight,
+    scale: u32,
 ) {
     let mut cursor_x = x;
     for ch in text.chars() {
@@ -496,17 +596,35 @@ fn draw_text(
             for (row, bits) in glyph.iter().enumerate() {
                 for col in 0..8 {
                     if (bits >> col) & 1 == 1 {
-                        let px = cursor_x + col;
-                        let py = y + row as i32;
-                        set_pixel(frame, width, height, px, py, color);
+                        let px = cursor_x + col * scale as i32;
+                        let py = y + row as i32 * scale as i32;
+                        draw_rect(
+                            frame,
+                            width,
+                            height,
+                            px,
+                            py,
+                            scale as i32,
+                            scale as i32,
+                            color,
+                        );
                         if font_weight == crate::style::FontWeight::Bold {
-                            set_pixel(frame, width, height, px + 1, py, color);
+                            draw_rect(
+                                frame,
+                                width,
+                                height,
+                                px + scale as i32,
+                                py,
+                                scale as i32,
+                                scale as i32,
+                                color,
+                            );
                         }
                     }
                 }
             }
         }
-        cursor_x += CHAR_WIDTH as i32;
+        cursor_x += (CHAR_WIDTH * scale) as i32;
     }
 }
 
@@ -516,29 +634,31 @@ fn draw_scrollbar(
     height: u32,
     content_height: u32,
     scroll_y: u32,
-    top_offset: u32,
+    viewport_height: u32,
 ) {
-    let viewport_height = height.saturating_sub(top_offset);
     if content_height <= viewport_height || width < 12 || viewport_height == 0 {
         return;
     }
 
-    let track_x = width.saturating_sub(10);
+    let track_x = width.saturating_sub(14);
+    let track_y = CHROME_HEIGHT + TOP_MARGIN;
+    let track_height = height.saturating_sub(track_y + TOP_MARGIN);
+
     draw_rect(
         frame,
         width,
         height,
         track_x as i32,
-        top_offset as i32,
-        6,
-        viewport_height as i32,
+        track_y as i32,
+        SCROLLBAR_WIDTH as i32,
+        track_height as i32,
         Color::rgb(228, 224, 214),
     );
 
-    let thumb_height = ((viewport_height as f32 / content_height as f32) * viewport_height as f32)
+    let thumb_height = ((viewport_height as f32 / content_height as f32) * track_height as f32)
         .round()
-        .max(24.0) as u32;
-    let travel = viewport_height.saturating_sub(thumb_height).max(1);
+        .max(28.0) as u32;
+    let travel = track_height.saturating_sub(thumb_height).max(1);
     let max_scroll = content_height.saturating_sub(viewport_height).max(1);
     let thumb_y = ((scroll_y as f32 / max_scroll as f32) * travel as f32).round() as u32;
 
@@ -547,8 +667,8 @@ fn draw_scrollbar(
         width,
         height,
         track_x as i32,
-        (top_offset + thumb_y) as i32,
-        6,
+        (track_y + thumb_y) as i32,
+        SCROLLBAR_WIDTH as i32,
         thumb_height as i32,
         Color::rgb(122, 128, 138),
     );
@@ -574,6 +694,29 @@ fn set_pixel(frame: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: C
     }
 }
 
+fn compute_content_origin_x(viewport_width: u32, content_pixel_width: u32) -> u32 {
+    if viewport_width <= content_pixel_width + SIDE_MARGIN * 2 {
+        SIDE_MARGIN
+    } else {
+        (viewport_width - content_pixel_width) / 2
+    }
+}
+
+fn content_viewport_height_for(viewport_height: u32, scale: u32) -> u32 {
+    let available_pixels = viewport_height
+        .saturating_sub(CHROME_HEIGHT + TOP_MARGIN * 2)
+        .max(scale);
+    (available_pixels / scale).max(1)
+}
+
+fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
+    let min_x = ADDRESS_BAR_PADDING as f64;
+    let max_x = viewport_width.saturating_sub(ADDRESS_BAR_PADDING) as f64;
+    let min_y = 12.0;
+    let max_y = (12 + ADDRESS_BAR_HEIGHT) as f64;
+    x >= min_x && x <= max_x && y >= min_y && y <= max_y
+}
+
 fn clamp_scroll(scroll_y: u32, content_height: u32, viewport_height: u32) -> u32 {
     scroll_y.min(content_height.saturating_sub(viewport_height))
 }
@@ -594,7 +737,10 @@ fn apply_scroll_delta(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_scroll_delta, clamp_scroll, load_page, rasterize, CHROME_HEIGHT};
+    use super::{
+        address_bar_hit_test, apply_scroll_delta, clamp_scroll, content_scale_for_viewport,
+        load_page, rasterize, CHROME_HEIGHT,
+    };
     use crate::paint::{Color, DisplayCommand, DisplayList};
 
     #[test]
@@ -612,6 +758,19 @@ mod tests {
     }
 
     #[test]
+    fn scales_up_for_large_viewports() {
+        assert_eq!(content_scale_for_viewport(800, 600), 1);
+        assert_eq!(content_scale_for_viewport(1200, 700), 2);
+        assert_eq!(content_scale_for_viewport(1800, 1200), 3);
+    }
+
+    #[test]
+    fn detects_address_bar_hits() {
+        assert!(address_bar_hit_test(30.0, 20.0, 900));
+        assert!(!address_bar_hit_test(30.0, 90.0, 900));
+    }
+
+    #[test]
     fn rasterizes_with_scroll_offset() {
         let display_list = DisplayList {
             width: 120,
@@ -626,10 +785,10 @@ mod tests {
             background: Color::rgb(255, 255, 255),
         };
 
-        let mut frame = vec![255_u8; (120 * 90 * 4) as usize];
-        rasterize(&display_list, &mut frame, 120, 90, 35);
+        let mut frame = vec![255_u8; (240 * 140 * 4) as usize];
+        rasterize(&display_list, &mut frame, 240, 140, 35, 2);
 
-        let pixel_index = (((CHROME_HEIGHT + 5) * 120 + 12) * 4) as usize;
+        let pixel_index = (((CHROME_HEIGHT + 30) * 240 + 72) * 4) as usize;
         assert_eq!(frame[pixel_index], 255);
         assert_eq!(frame[pixel_index + 1], 0);
         assert_eq!(frame[pixel_index + 2], 0);
@@ -637,7 +796,7 @@ mod tests {
 
     #[test]
     fn loads_page_fixture() {
-        let page = load_page("examples/welcome.html").expect("fixture should load");
+        let page = load_page("examples/welcome.html", 960, 720).expect("fixture should load");
         assert!(!page.display_list.commands.is_empty());
     }
 }

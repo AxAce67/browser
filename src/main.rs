@@ -18,6 +18,17 @@ fn main() {
         }
     };
 
+    if config.gui {
+        let requested_source = config
+            .source
+            .unwrap_or_else(|| source::DEFAULT_SOURCE.to_string());
+        if let Err(message) = gui::run(&requested_source) {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let (html_input, source_path) = match source::load_html(config.source.as_deref()) {
         Ok(value) => value,
         Err(message) => {
@@ -30,13 +41,6 @@ fn main() {
     let stylesheet = style::collect_stylesheets(&document);
     let styled = style::style_tree(&document, &stylesheet);
     let layout = layout::build(&styled, 48);
-    if config.gui {
-        if let Err(message) = gui::run(&source_path.display().to_string()) {
-            eprintln!("{message}");
-            std::process::exit(1);
-        }
-        return;
-    }
 
     let _display_list = paint::build_display_list(&layout);
     let frame = renderer::render(&layout);
