@@ -594,6 +594,25 @@ impl TextRasterizer {
         let font = self.font_for_weight(font_weight)?;
         Some(layout_text_glyphs(font, text, font_size as f32, x, y))
     }
+
+    fn draw_positioned_text(
+        &self,
+        frame: &mut [u8],
+        width: u32,
+        height: u32,
+        glyphs: &[GlyphPosition],
+        color: Color,
+        font_weight: crate::style::FontWeight,
+        clip_top: Option<i32>,
+        clip_bottom: Option<i32>,
+    ) -> bool {
+        let Some(font) = self.font_for_weight(font_weight) else {
+            return false;
+        };
+
+        draw_positioned_glyphs(frame, width, height, glyphs, color, font, clip_top, clip_bottom);
+        true
+    }
 }
 
 impl TextMeasurer for TextRasterizer {
@@ -1010,19 +1029,46 @@ fn draw_chrome(
         );
     }
 
-    text_rasterizer.draw_text(
-        frame,
-        width,
-        height,
-        layout.text_x,
-        layout.text_y,
-        &layout.display_text,
-        Color::rgb(32, 35, 40),
-        crate::style::FontWeight::Normal,
-        17.0 * scale as f32,
-        None,
-        None,
-    );
+    if let Some(glyphs) = &layout.glyphs {
+        if !text_rasterizer.draw_positioned_text(
+            frame,
+            width,
+            height,
+            glyphs,
+            Color::rgb(32, 35, 40),
+            crate::style::FontWeight::Normal,
+            None,
+            None,
+        ) {
+            text_rasterizer.draw_text(
+                frame,
+                width,
+                height,
+                layout.text_x,
+                layout.text_y,
+                &layout.display_text,
+                Color::rgb(32, 35, 40),
+                crate::style::FontWeight::Normal,
+                17.0 * scale as f32,
+                None,
+                None,
+            );
+        }
+    } else {
+        text_rasterizer.draw_text(
+            frame,
+            width,
+            height,
+            layout.text_x,
+            layout.text_y,
+            &layout.display_text,
+            Color::rgb(32, 35, 40),
+            crate::style::FontWeight::Normal,
+            17.0 * scale as f32,
+            None,
+            None,
+        );
+    }
 
     if address_focus && caret_visible {
         let caret_x = layout.x_for_char_index(text_rasterizer, address_cursor);
@@ -1290,6 +1336,40 @@ fn draw_text_fontdue(
     clip_bottom: Option<i32>,
 ) {
     for glyph in layout_text_glyphs(font, text, font_size, x, y) {
+        let (metrics, bitmap) = font.rasterize_config(glyph.key);
+        let glyph_y = glyph.y.round() as i32;
+        if clip_top.is_some_and(|top| glyph_y + metrics.height as i32 <= top)
+            || clip_bottom.is_some_and(|bottom| glyph_y >= bottom)
+        {
+            continue;
+        }
+        draw_glyph_bitmap(
+            frame,
+            width,
+            height,
+            glyph.x.round() as i32,
+            glyph_y,
+            metrics.width,
+            metrics.height,
+            &bitmap,
+            color,
+            clip_top,
+            clip_bottom,
+        );
+    }
+}
+
+fn draw_positioned_glyphs(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    glyphs: &[GlyphPosition],
+    color: Color,
+    font: &Font,
+    clip_top: Option<i32>,
+    clip_bottom: Option<i32>,
+) {
+    for glyph in glyphs {
         let (metrics, bitmap) = font.rasterize_config(glyph.key);
         let glyph_y = glyph.y.round() as i32;
         if clip_top.is_some_and(|top| glyph_y + metrics.height as i32 <= top)
