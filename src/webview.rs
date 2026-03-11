@@ -18,13 +18,19 @@ use winit::window::{Window, WindowId};
 use wry::dpi::{LogicalPosition as WryLogicalPosition, LogicalSize as WryLogicalSize};
 use wry::{Rect, WebView, WebViewBuilder};
 
-const CHROME_HEIGHT: u32 = 76;
+const CHROME_HEIGHT: u32 = 112;
+const TAB_BAR_HEIGHT: u32 = 36;
 const ADDRESS_BAR_HEIGHT: u32 = 34;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const NAV_BUTTON_SIZE: u32 = 28;
 const NAV_BUTTON_SPACING: u32 = 10;
 const NAV_BUTTON_MARGIN_LEFT: u32 = 12;
 const ADDRESS_BAR_LEFT_OFFSET: u32 = 118;
+const TAB_HEIGHT: u32 = 26;
+const TAB_MIN_WIDTH: u32 = 160;
+const TAB_MAX_WIDTH: u32 = 220;
+const TAB_GAP: u32 = 8;
+const NEW_TAB_BUTTON_SIZE: u32 = 26;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 1200;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 820;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
@@ -49,6 +55,14 @@ enum BrowserEvent {
     TitleChanged(String),
 }
 
+#[derive(Clone, Debug)]
+struct TabState {
+    source: String,
+    current_url: String,
+    title: String,
+    is_loading: bool,
+}
+
 struct WebViewApp {
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
@@ -56,10 +70,8 @@ struct WebViewApp {
     proxy: EventLoopProxy<BrowserEvent>,
     text_rasterizer: TextRasterizer,
     clipboard: Option<Clipboard>,
-    initial_source: String,
-    initial_url: String,
-    current_source: String,
-    current_url: String,
+    tabs: Vec<TabState>,
+    active_tab: usize,
     address_input: String,
     address_focus: bool,
     address_cursor: usize,
@@ -67,8 +79,6 @@ struct WebViewApp {
     address_drag_active: bool,
     preedit_text: String,
     status_message: Option<String>,
-    is_loading: bool,
-    page_title: String,
     viewport_width: u32,
     viewport_height: u32,
     modifiers: ModifiersState,
@@ -86,10 +96,13 @@ impl WebViewApp {
             proxy,
             text_rasterizer: TextRasterizer::load(),
             clipboard: Clipboard::new().ok(),
-            initial_source: initial_source.to_string(),
-            initial_url: initial_url.to_string(),
-            current_source: initial_source.to_string(),
-            current_url: initial_url.to_string(),
+            tabs: vec![TabState {
+                source: initial_source.to_string(),
+                current_url: initial_url.to_string(),
+                title: initial_source.to_string(),
+                is_loading: true,
+            }],
+            active_tab: 0,
             address_input: initial_source.to_string(),
             address_focus: false,
             address_cursor: initial_cursor,
@@ -97,8 +110,6 @@ impl WebViewApp {
             address_drag_active: false,
             preedit_text: String::new(),
             status_message: Some("Loading page".to_string()),
-            is_loading: true,
-            page_title: initial_source.to_string(),
             viewport_width: DEFAULT_VIEWPORT_WIDTH,
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
             modifiers: ModifiersState::empty(),
@@ -110,6 +121,7 @@ impl WebViewApp {
     fn draw(&mut self) -> Result<(), String> {
         let address_selection = self.address_selection_range();
         let caret_visible = self.address_caret_visible();
+        let active_loading = self.active_tab().is_some_and(|tab| tab.is_loading);
         let Some(pixels) = self.pixels.as_mut() else {
             return Ok(());
         };
@@ -121,7 +133,9 @@ impl WebViewApp {
             frame,
             self.viewport_width,
             self.viewport_height,
-            self.is_loading,
+            &self.tabs,
+            self.active_tab,
+            active_loading,
             &self.address_input,
             &self.preedit_text,
             self.address_focus,
@@ -140,6 +154,14 @@ impl WebViewApp {
         }
 
         Ok(())
+    }
+
+    fn active_tab(&self) -> Option<&TabState> {
+        self.tabs.get(self.active_tab)
+    }
+
+    fn active_tab_mut(&mut self) -> Option<&mut TabState> {
+        self.tabs.get_mut(self.active_tab)
     }
 
     fn request_redraw(&self) {
@@ -343,20 +365,36 @@ impl WebViewApp {
         false
     }
 
+    fn sync_address_from_active_tab(&mut self) {
+        if self.address_focus {
+            return;
+        }
+        if let Some(tab) = self.active_tab() {
+            self.address_input = tab.source.clone();
+            self.address_cursor = self.address_char_count();
+            self.clear_address_selection();
+        }
+    }
+
     fn navigate_to_input(&mut self, requested: String) {
         match source::normalize_browser_url(&requested) {
             Ok(url) => {
-                if let Some(webview) = self.webview.as_ref() {
-                    match webview.load_url(&url) {
+                if self.webview.is_some() {
+                    if let Some(tab) = self.active_tab_mut() {
+                        tab.source = requested.clone();
+                        tab.current_url = url.clone();
+                        tab.is_loading = true;
+                    }
+                    match self.webview.as_ref().expect("checked above").load_url(&url) {
                         Ok(()) => {
                             self.address_input = requested.clone();
-                            self.current_source = requested;
-                            self.current_url = url.clone();
-                            self.is_loading = true;
                             self.status_message = Some(format!("Loading {url}"));
                             self.set_address_focus(false);
                         }
                         Err(err) => {
+                            if let Some(tab) = self.active_tab_mut() {
+                                tab.is_loading = false;
+                            }
                             self.status_message =
                                 Some(format!("failed to navigate to {url}: {err}"));
                         }
@@ -369,11 +407,15 @@ impl WebViewApp {
     }
 
     fn reload(&mut self) {
-        if let Some(webview) = self.webview.as_ref() {
+        if self.webview.is_some() {
             self.status_message = Some("Reloading page".to_string());
-            self.is_loading = true;
-            if let Err(err) = webview.reload() {
-                self.is_loading = false;
+            if let Some(tab) = self.active_tab_mut() {
+                tab.is_loading = true;
+            }
+            if let Err(err) = self.webview.as_ref().expect("checked above").reload() {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.is_loading = false;
+                }
                 self.status_message = Some(format!("failed to reload page: {err}"));
             }
         }
@@ -381,18 +423,30 @@ impl WebViewApp {
     }
 
     fn history_back(&mut self) {
-        if let Some(webview) = self.webview.as_ref() {
-            let _ = webview.evaluate_script("history.back();");
-            self.is_loading = true;
+        if self.webview.is_some() {
+            if let Some(tab) = self.active_tab_mut() {
+                tab.is_loading = true;
+            }
+            let _ = self
+                .webview
+                .as_ref()
+                .expect("checked above")
+                .evaluate_script("history.back();");
             self.status_message = Some("Going back".to_string());
         }
         self.request_redraw();
     }
 
     fn history_forward(&mut self) {
-        if let Some(webview) = self.webview.as_ref() {
-            let _ = webview.evaluate_script("history.forward();");
-            self.is_loading = true;
+        if self.webview.is_some() {
+            if let Some(tab) = self.active_tab_mut() {
+                tab.is_loading = true;
+            }
+            let _ = self
+                .webview
+                .as_ref()
+                .expect("checked above")
+                .evaluate_script("history.forward();");
             self.status_message = Some("Going forward".to_string());
         }
         self.request_redraw();
@@ -400,16 +454,96 @@ impl WebViewApp {
 
     fn update_window_title(&self) {
         if let Some(window) = self.window.as_ref() {
-            let label = if self.page_title.is_empty() {
-                self.current_source.as_str()
+            let label = if let Some(tab) = self.active_tab() {
+                if tab.title.is_empty() {
+                    tab.source.as_str()
+                } else {
+                    tab.title.as_str()
+                }
             } else {
-                self.page_title.as_str()
+                "Browser"
             };
             window.set_title(&format!("Browser - {label}"));
         }
     }
 
+    fn open_new_tab(&mut self) {
+        self.tabs.push(TabState {
+            source: String::new(),
+            current_url: "about:blank".to_string(),
+            title: "New Tab".to_string(),
+            is_loading: true,
+        });
+        self.active_tab = self.tabs.len().saturating_sub(1);
+        self.address_input.clear();
+        self.address_cursor = 0;
+        self.clear_address_selection();
+        self.status_message = Some("Opened new tab".to_string());
+        if self.webview.is_some() {
+            if let Err(err) = self
+                .webview
+                .as_ref()
+                .expect("checked above")
+                .load_url("about:blank")
+            {
+                self.status_message = Some(format!("failed to open new tab: {err}"));
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.is_loading = false;
+                }
+            }
+        }
+        self.set_address_focus(true);
+        self.update_window_title();
+        self.request_redraw();
+    }
+
+    fn switch_to_tab(&mut self, tab_index: usize) {
+        if tab_index >= self.tabs.len() || tab_index == self.active_tab {
+            return;
+        }
+
+        self.active_tab = tab_index;
+        self.sync_address_from_active_tab();
+        self.set_address_focus(false);
+        let target_url = self
+            .active_tab()
+            .map(|tab| tab.current_url.clone())
+            .unwrap_or_else(|| "about:blank".to_string());
+        if let Some(tab) = self.active_tab_mut() {
+            tab.is_loading = true;
+        }
+        if self.webview.is_some() {
+            if let Err(err) = self
+                .webview
+                .as_ref()
+                .expect("checked above")
+                .load_url(&target_url)
+            {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.is_loading = false;
+                }
+                self.status_message = Some(format!("failed to switch tab: {err}"));
+            } else {
+                self.status_message = Some(format!("Loading {target_url}"));
+            }
+        }
+        self.update_window_title();
+        self.request_redraw();
+    }
+
     fn handle_primary_click(&mut self, position: PhysicalPosition<f64>) {
+        if new_tab_button_hit_test(position.x, position.y, self.viewport_width) {
+            self.open_new_tab();
+            return;
+        }
+
+        if let Some(tab_index) =
+            tab_hit_test(position.x, position.y, self.viewport_width, self.tabs.len())
+        {
+            self.switch_to_tab(tab_index);
+            return;
+        }
+
         if let Some(action) = nav_button_hit_test(position.x, position.y) {
             match action {
                 NavAction::Back => self.history_back(),
@@ -479,8 +613,11 @@ impl WebViewApp {
     fn handle_browser_event(&mut self, event: BrowserEvent) {
         match event {
             BrowserEvent::NavigationStarted(url) => {
-                self.current_url = url.clone();
-                self.is_loading = true;
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.current_url = url.clone();
+                    tab.source = url.clone();
+                    tab.is_loading = true;
+                }
                 if !self.address_focus {
                     self.address_input = url.clone();
                     self.address_cursor = self.address_char_count();
@@ -489,9 +626,11 @@ impl WebViewApp {
                 self.status_message = Some(format!("Loading {url}"));
             }
             BrowserEvent::PageFinished(url) => {
-                self.current_url = url.clone();
-                self.current_source = url.clone();
-                self.is_loading = false;
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.current_url = url.clone();
+                    tab.source = url.clone();
+                    tab.is_loading = false;
+                }
                 if !self.address_focus {
                     self.address_input = url;
                     self.address_cursor = self.address_char_count();
@@ -500,7 +639,9 @@ impl WebViewApp {
                 self.status_message = Some("Page loaded".to_string());
             }
             BrowserEvent::TitleChanged(title) => {
-                self.page_title = title;
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.title = title;
+                }
                 self.update_window_title();
             }
         }
@@ -511,7 +652,7 @@ impl WebViewApp {
 impl ApplicationHandler<BrowserEvent> for WebViewApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attributes = Window::default_attributes()
-            .with_title(format!("Browser - {}", self.initial_source))
+            .with_title("Browser")
             .with_inner_size(LogicalSize::new(
                 self.viewport_width as f64,
                 self.viewport_height as f64,
@@ -543,8 +684,12 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
         };
 
         let proxy = self.proxy.clone();
+        let initial_url = self
+            .active_tab()
+            .map(|tab| tab.current_url.clone())
+            .unwrap_or_else(|| "about:blank".to_string());
         let webview = match WebViewBuilder::new()
-            .with_url(&self.initial_url)
+            .with_url(&initial_url)
             .with_bounds(Rect {
                 position: WryLogicalPosition::new(0, CHROME_HEIGHT).into(),
                 size: WryLogicalSize::new(
@@ -679,11 +824,20 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
                     && (self.modifiers.control_key() || self.modifiers.super_key())
                 {
                     self.set_address_focus(true);
-                    self.address_input = self.current_source.clone();
+                    if let Some(tab) = self.active_tab() {
+                        self.address_input = tab.source.clone();
+                    }
                     self.address_cursor = self.address_char_count();
                     self.select_all_address();
                     self.status_message = Some("Editing address".to_string());
                     self.request_redraw();
+                    return;
+                }
+
+                if matches!(event.logical_key.as_ref(), Key::Character(ch) if ch.eq_ignore_ascii_case("t"))
+                    && (self.modifiers.control_key() || self.modifiers.super_key())
+                {
+                    self.open_new_tab();
                     return;
                 }
 
@@ -704,7 +858,9 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
                         }
                         Key::Named(NamedKey::Escape) => {
                             self.set_address_focus(false);
-                            self.address_input = self.current_source.clone();
+                            if let Some(tab) = self.active_tab() {
+                                self.address_input = tab.source.clone();
+                            }
                             self.address_cursor = self.address_char_count();
                             self.clear_address_selection();
                             self.status_message = Some("Address edit cancelled".to_string());
@@ -906,6 +1062,8 @@ fn draw_chrome(
     frame: &mut [u8],
     width: u32,
     height: u32,
+    tabs: &[TabState],
+    active_tab: usize,
     is_loading: bool,
     address_input: &str,
     preedit_text: &str,
@@ -925,6 +1083,86 @@ fn draw_chrome(
         CHROME_HEIGHT as i32,
         Color::rgb(232, 228, 220),
     );
+
+    for (index, tab) in tabs.iter().enumerate() {
+        if let Some(rect) = tab_rect(index, width, tabs.len()) {
+            draw_rect(
+                frame,
+                width,
+                height,
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                if index == active_tab {
+                    Color::rgb(250, 248, 243)
+                } else {
+                    Color::rgb(223, 219, 210)
+                },
+            );
+
+            let label = if tab.title.is_empty() {
+                "New Tab".to_string()
+            } else if tab.title.chars().count() > 24 {
+                let mut shortened = tab.title.chars().take(21).collect::<String>();
+                shortened.push_str("...");
+                shortened
+            } else {
+                tab.title.clone()
+            };
+
+            text_rasterizer.draw_text(
+                frame,
+                width,
+                height,
+                rect.x + 10,
+                rect.y + 6,
+                &label,
+                Color::rgb(52, 56, 64),
+                if index == active_tab {
+                    FontWeight::Bold
+                } else {
+                    FontWeight::Normal
+                },
+                14.0,
+            );
+        }
+    }
+
+    let plus_rect = new_tab_button_rect(width);
+    draw_rect(
+        frame,
+        width,
+        height,
+        plus_rect.x,
+        plus_rect.y,
+        plus_rect.width,
+        plus_rect.height,
+        Color::rgb(246, 243, 236),
+    );
+    text_rasterizer.draw_text(
+        frame,
+        width,
+        height,
+        plus_rect.x + 8,
+        plus_rect.y + 5,
+        "+",
+        Color::rgb(72, 76, 84),
+        FontWeight::Bold,
+        18.0,
+    );
+
+    draw_rect(
+        frame,
+        width,
+        height,
+        0,
+        TAB_BAR_HEIGHT as i32,
+        width as i32,
+        1,
+        Color::rgb(210, 205, 196),
+    );
+
     for action in [NavAction::Back, NavAction::Forward, NavAction::Reload] {
         let rect = nav_button_rect(action);
         draw_rect(
@@ -970,7 +1208,7 @@ fn draw_chrome(
         width,
         height,
         ADDRESS_BAR_LEFT_OFFSET as i32,
-        12,
+        nav_row_y() as i32 + 4,
         width.saturating_sub(ADDRESS_BAR_LEFT_OFFSET + ADDRESS_BAR_PADDING) as i32,
         ADDRESS_BAR_HEIGHT as i32,
         if address_focus {
@@ -993,7 +1231,7 @@ fn draw_chrome(
             width,
             height,
             selection_x,
-            14,
+            nav_row_y() as i32 + 6,
             selection_width.max(1),
             ADDRESS_BAR_HEIGHT.saturating_sub(4) as i32,
             Color::rgb(205, 222, 246),
@@ -1030,7 +1268,7 @@ fn draw_chrome(
             width,
             height,
             caret_x,
-            16,
+            nav_row_y() as i32 + 8,
             2,
             ADDRESS_BAR_HEIGHT.saturating_sub(8) as i32,
             Color::rgb(46, 50, 56),
@@ -1048,7 +1286,7 @@ fn draw_chrome(
             width,
             height,
             (ADDRESS_BAR_PADDING + 8) as i32,
-            52,
+            88,
             &rendered_message,
             Color::rgb(96, 100, 110),
             FontWeight::Normal,
@@ -1296,7 +1534,7 @@ fn build_address_text_layout(
     address_focus: bool,
 ) -> AddressTextLayout {
     let text_x = (ADDRESS_BAR_LEFT_OFFSET + 8) as i32;
-    let text_y = 20;
+    let text_y = nav_row_y() as i32 + 12;
     let prefix = if address_focus { "> " } else { "" };
     let display_text = format!("{prefix}{address_input}{preedit_text}");
     let font_size = 17usize;
@@ -1374,8 +1612,8 @@ impl AddressTextLayout {
 fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
     let min_x = ADDRESS_BAR_LEFT_OFFSET as f64;
     let max_x = viewport_width.saturating_sub(ADDRESS_BAR_PADDING) as f64;
-    let min_y = 12.0;
-    let max_y = (12 + ADDRESS_BAR_HEIGHT) as f64;
+    let min_y = (nav_row_y() + 4) as f64;
+    let max_y = (nav_row_y() + 4 + ADDRESS_BAR_HEIGHT) as f64;
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
 }
 
@@ -1402,10 +1640,65 @@ fn nav_button_rect(action: NavAction) -> ButtonRect {
     };
     ButtonRect {
         x: (NAV_BUTTON_MARGIN_LEFT + index * (NAV_BUTTON_SIZE + NAV_BUTTON_SPACING)) as i32,
-        y: 15,
+        y: nav_row_y() as i32 + 7,
         width: NAV_BUTTON_SIZE as i32,
         height: NAV_BUTTON_SIZE as i32,
     }
+}
+
+fn nav_row_y() -> u32 {
+    TAB_BAR_HEIGHT
+}
+
+fn tab_rect(index: usize, viewport_width: u32, tab_count: usize) -> Option<ButtonRect> {
+    if tab_count == 0 {
+        return None;
+    }
+    let available_width = viewport_width
+        .saturating_sub(NEW_TAB_BUTTON_SIZE + ADDRESS_BAR_PADDING * 3)
+        .max(TAB_MIN_WIDTH);
+    let total_gaps = TAB_GAP.saturating_mul(tab_count.saturating_sub(1) as u32);
+    let width_per_tab = ((available_width.saturating_sub(total_gaps)) / tab_count as u32)
+        .clamp(TAB_MIN_WIDTH, TAB_MAX_WIDTH);
+    let x = ADDRESS_BAR_PADDING + index as u32 * (width_per_tab + TAB_GAP);
+    Some(ButtonRect {
+        x: x as i32,
+        y: 6,
+        width: width_per_tab as i32,
+        height: TAB_HEIGHT as i32,
+    })
+}
+
+fn tab_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> Option<usize> {
+    for index in 0..tab_count {
+        if let Some(rect) = tab_rect(index, viewport_width, tab_count) {
+            if x >= rect.x as f64
+                && x <= (rect.x + rect.width) as f64
+                && y >= rect.y as f64
+                && y <= (rect.y + rect.height) as f64
+            {
+                return Some(index);
+            }
+        }
+    }
+    None
+}
+
+fn new_tab_button_rect(viewport_width: u32) -> ButtonRect {
+    ButtonRect {
+        x: viewport_width.saturating_sub(ADDRESS_BAR_PADDING + NEW_TAB_BUTTON_SIZE) as i32,
+        y: 6,
+        width: NEW_TAB_BUTTON_SIZE as i32,
+        height: NEW_TAB_BUTTON_SIZE as i32,
+    }
+}
+
+fn new_tab_button_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
+    let rect = new_tab_button_rect(viewport_width);
+    x >= rect.x as f64
+        && x <= (rect.x + rect.width) as f64
+        && y >= rect.y as f64
+        && y <= (rect.y + rect.height) as f64
 }
 
 fn nav_button_hit_test(x: f64, y: f64) -> Option<NavAction> {
@@ -1448,22 +1741,35 @@ fn sanitize_clipboard_text(text: &str) -> String {
 mod tests {
     use super::{
         address_bar_cursor_from_position, address_bar_hit_test, address_slice,
-        build_address_text_layout, nav_button_hit_test, sanitize_clipboard_text, NavAction,
-        TextRasterizer,
+        build_address_text_layout, nav_button_hit_test, new_tab_button_hit_test,
+        sanitize_clipboard_text, tab_hit_test, NavAction, TextRasterizer,
     };
 
     #[test]
     fn detects_address_bar_hits() {
-        assert!(address_bar_hit_test(140.0, 20.0, 900));
+        assert!(address_bar_hit_test(140.0, 50.0, 900));
         assert!(!address_bar_hit_test(30.0, 90.0, 900));
     }
 
     #[test]
     fn detects_nav_button_hits() {
-        assert_eq!(nav_button_hit_test(18.0, 20.0), Some(NavAction::Back));
-        assert_eq!(nav_button_hit_test(58.0, 20.0), Some(NavAction::Forward));
-        assert_eq!(nav_button_hit_test(98.0, 20.0), Some(NavAction::Reload));
-        assert_eq!(nav_button_hit_test(200.0, 20.0), None);
+        assert_eq!(nav_button_hit_test(18.0, 50.0), Some(NavAction::Back));
+        assert_eq!(nav_button_hit_test(58.0, 50.0), Some(NavAction::Forward));
+        assert_eq!(nav_button_hit_test(98.0, 50.0), Some(NavAction::Reload));
+        assert_eq!(nav_button_hit_test(200.0, 50.0), None);
+    }
+
+    #[test]
+    fn detects_tab_hits() {
+        assert_eq!(tab_hit_test(24.0, 12.0, 900, 2), Some(0));
+        assert_eq!(tab_hit_test(260.0, 12.0, 900, 2), Some(1));
+        assert_eq!(tab_hit_test(700.0, 12.0, 900, 2), None);
+    }
+
+    #[test]
+    fn detects_new_tab_button_hits() {
+        assert!(new_tab_button_hit_test(870.0, 18.0, 900));
+        assert!(!new_tab_button_hit_test(820.0, 18.0, 900));
     }
 
     #[test]
