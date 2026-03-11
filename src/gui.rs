@@ -25,7 +25,6 @@ const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
-const MAX_CONTENT_WIDTH_PX: u32 = 1080;
 
 pub fn run(initial_source: &str) -> Result<(), String> {
     let text_rasterizer = TextRasterizer::load();
@@ -551,7 +550,6 @@ fn build_page_display_list(
     let content_scale = content_scale_for_viewport(viewport_width, viewport_height, scale_factor);
     let available_width = viewport_width
         .saturating_sub(SIDE_MARGIN * 2 + SCROLLBAR_WIDTH + 18)
-        .min(MAX_CONTENT_WIDTH_PX)
         .max(420);
     let layout_width = (available_width / content_scale.max(1)) as usize;
 
@@ -1004,11 +1002,8 @@ fn blend_pixel(
 }
 
 fn compute_content_origin_x(viewport_width: u32, content_pixel_width: u32) -> u32 {
-    if viewport_width <= content_pixel_width + SIDE_MARGIN * 2 {
-        SIDE_MARGIN
-    } else {
-        (viewport_width - content_pixel_width) / 2
-    }
+    let _ = content_pixel_width;
+    SIDE_MARGIN.min(viewport_width.saturating_sub(1))
 }
 
 fn content_viewport_height_for(viewport_height: u32, scale: u32) -> u32 {

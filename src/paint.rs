@@ -1,4 +1,4 @@
-use crate::layout::LayoutBox;
+use crate::layout::{LayoutBox, LayoutKind};
 use crate::style::FontWeight;
 #[cfg(test)]
 use crate::style::LineHeight;
@@ -151,8 +151,25 @@ fn paint_box(
         }
 
         *cursor_y = content_y;
-        for line in &layout.lines {
+        for (line_index, line) in layout.lines.iter().enumerate() {
             let mut cursor_x = content_x;
+            if matches!(&layout.kind, LayoutKind::Block { tag_name } if tag_name == "li")
+                && line_index == 0
+            {
+                let bullet_x = box_x.saturating_add(8);
+                let bullet_width = (layout.style.font_size as u32 / 2).max(8);
+                commands.push(DisplayCommand::DrawText {
+                    x: bullet_x,
+                    y: *cursor_y,
+                    text: "\u{2022}".to_string(),
+                    width: bullet_width,
+                    line_height: line.height,
+                    color: parse_color(&layout.style.color),
+                    font_weight: layout.style.font_weight,
+                    underline: false,
+                    font_size: layout.style.font_size as u32,
+                });
+            }
             for fragment in &line.fragments {
                 commands.push(DisplayCommand::DrawText {
                     x: cursor_x,

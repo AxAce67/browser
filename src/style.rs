@@ -169,7 +169,10 @@ fn default_style(node: &Node) -> ComputedStyle {
 
             match element.tag_name.as_str() {
                 "body" => {
-                    style.margin = EdgeSizes::uniform(8);
+                    style.margin = EdgeSizes::uniform(16);
+                    style.line_height = LineHeight::RelativePercent(155);
+                }
+                "main" | "section" | "article" | "header" | "footer" | "nav" => {
                     style.line_height = LineHeight::RelativePercent(155);
                 }
                 "h1" => {
@@ -200,6 +203,31 @@ fn default_style(node: &Node) -> ComputedStyle {
                 "div" => {
                     style.line_height = LineHeight::RelativePercent(150);
                     style.margin = EdgeSizes::vertical_horizontal(8, 0);
+                }
+                "ul" | "ol" => {
+                    style.line_height = LineHeight::RelativePercent(150);
+                    style.margin = EdgeSizes {
+                        top: 16,
+                        right: 0,
+                        bottom: 16,
+                        left: 0,
+                    };
+                    style.padding = EdgeSizes {
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                        left: 28,
+                    };
+                }
+                "li" => {
+                    style.line_height = LineHeight::RelativePercent(150);
+                    style.margin = EdgeSizes::vertical_horizontal(6, 0);
+                    style.padding = EdgeSizes {
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                        left: 28,
+                    };
                 }
                 "a" => {
                     style.color = "blue".to_string();
