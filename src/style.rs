@@ -162,7 +162,21 @@ fn default_style(node: &Node) -> ComputedStyle {
     match &node.node_type {
         NodeType::Element(element) => {
             style.display = match element.tag_name.as_str() {
-                "span" | "a" | "br" => Display::Inline,
+                "span"
+                | "a"
+                | "br"
+                | "strong"
+                | "b"
+                | "em"
+                | "i"
+                | "small"
+                | "code"
+                | "label"
+                | "cite"
+                | "q"
+                | "abbr"
+                | "sub"
+                | "sup" => Display::Inline,
                 "style" | "head" | "script" | "meta" | "link" | "title" | "noscript" => {
                     Display::None
                 }
@@ -194,9 +208,17 @@ fn default_style(node: &Node) -> ComputedStyle {
                     style.line_height = LineHeight::RelativePercent(120);
                     style.margin = EdgeSizes::vertical_horizontal(18, 0);
                 }
-                "h3" | "strong" => {
+                "h3" => {
                     style.font_weight = FontWeight::Bold;
                     style.font_size = 18;
+                    style.line_height = LineHeight::RelativePercent(130);
+                    style.margin = EdgeSizes::vertical_horizontal(16, 0);
+                }
+                "strong" | "b" => {
+                    style.font_weight = FontWeight::Bold;
+                }
+                "small" => {
+                    style.font_size = 14;
                 }
                 "p" => {
                     style.line_height = LineHeight::RelativePercent(160);
@@ -524,5 +546,34 @@ mod tests {
         let hidden_paragraph = &styled.children[0].children[1].children[1];
         assert_eq!(hidden_paragraph.style.display, Display::None);
         assert_eq!(hidden_paragraph.style.font_weight, FontWeight::Normal);
+    }
+
+    #[test]
+    fn keeps_semantic_inline_tags_inline() {
+        let document = crate::html::parse(
+            r#"<p>Hello <strong>bold</strong> <em>world</em> <small>tiny</small></p>"#,
+        );
+
+        let stylesheet = collect_stylesheets(&document);
+        let styled = style_tree(&document, &stylesheet);
+        let paragraph = &styled.children[0];
+
+        let inline_elements = paragraph
+            .children
+            .iter()
+            .filter(|child| matches!(child.node_type, NodeType::Element(_)))
+            .collect::<Vec<_>>();
+
+        let strong = inline_elements[0];
+        assert_eq!(strong.style.display, Display::Inline);
+        assert_eq!(strong.style.font_weight, FontWeight::Bold);
+        assert_eq!(strong.style.font_size, 16);
+
+        let em = inline_elements[1];
+        assert_eq!(em.style.display, Display::Inline);
+
+        let small = inline_elements[2];
+        assert_eq!(small.style.display, Display::Inline);
+        assert_eq!(small.style.font_size, 14);
     }
 }

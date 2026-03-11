@@ -607,6 +607,21 @@ mod tests {
     }
 
     #[test]
+    fn keeps_inline_strong_text_in_same_paragraph_flow() {
+        let document =
+            crate::html::parse(r#"<p>We <strong>keep bold text</strong> inline.</p>"#);
+        let stylesheet = style::collect_stylesheets(&document);
+        let styled = style::style_tree(&document, &stylesheet);
+        let layout = build_with_measurer(&styled, 240, &MonospaceTextMeasurer);
+
+        assert_eq!(layout.children[0].children.len(), 0);
+        assert_eq!(layout.children[0].lines.len(), 1);
+        assert_eq!(layout.children[0].lines[0].fragments.len(), 3);
+        assert_eq!(layout.children[0].lines[0].fragments[1].font_weight, FontWeight::Bold);
+        assert_eq!(layout.children[0].lines[0].fragments[1].text, "keep bold text");
+    }
+
+    #[test]
     fn breaks_lines_on_br_elements() {
         let document = crate::html::parse(r#"<p>hello<br>world</p>"#);
         let stylesheet = style::collect_stylesheets(&document);
