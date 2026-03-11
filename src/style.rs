@@ -238,6 +238,9 @@ fn default_style(node: &Node) -> ComputedStyle {
                         left: 24,
                     };
                 }
+                "hr" => {
+                    style.margin = EdgeSizes::vertical_horizontal(20, 0);
+                }
                 "ul" | "ol" => {
                     style.line_height = LineHeight::RelativePercent(150);
                     style.margin = EdgeSizes {
@@ -266,6 +269,10 @@ fn default_style(node: &Node) -> ComputedStyle {
                 "a" => {
                     style.color = "blue".to_string();
                     style.underline = true;
+                }
+                "code" => {
+                    style.background_color = Some("#ece8df".to_string());
+                    style.font_size = 15;
                 }
                 _ => {}
             }
@@ -551,7 +558,7 @@ mod tests {
     #[test]
     fn keeps_semantic_inline_tags_inline() {
         let document = crate::html::parse(
-            r#"<p>Hello <strong>bold</strong> <em>world</em> <small>tiny</small></p>"#,
+            r#"<p>Hello <strong>bold</strong> <em>world</em> <small>tiny</small> <code>snippet()</code></p>"#,
         );
 
         let stylesheet = collect_stylesheets(&document);
@@ -575,5 +582,9 @@ mod tests {
         let small = inline_elements[2];
         assert_eq!(small.style.display, Display::Inline);
         assert_eq!(small.style.font_size, 14);
+
+        let code = inline_elements[3];
+        assert_eq!(code.style.display, Display::Inline);
+        assert_eq!(code.style.background_color.as_deref(), Some("#ece8df"));
     }
 }

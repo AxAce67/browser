@@ -134,8 +134,10 @@ fn paint_box(
         .iter()
         .map(|line| line.height)
         .sum::<u32>();
+    let is_blockquote = matches!(&layout.kind, LayoutKind::Block { tag_name } if tag_name == "blockquote");
+    let is_hr = matches!(&layout.kind, LayoutKind::Block { tag_name } if tag_name == "hr");
 
-    if !layout.lines.is_empty() {
+    if !layout.lines.is_empty() || !layout.children.is_empty() || is_hr {
         if let Some(background) = &layout.style.background_color {
             commands.push(DisplayCommand::FillRect {
                 x: box_x,
@@ -147,6 +149,30 @@ fn paint_box(
                     .saturating_add(layout.style.padding.top as u32)
                     .saturating_add(layout.style.padding.bottom as u32),
                 color: parse_color(background),
+            });
+        }
+
+        if is_blockquote {
+            commands.push(DisplayCommand::FillRect {
+                x: box_x.saturating_add(6),
+                y: start_y,
+                width: 4,
+                height: text_height
+                    .saturating_add(layout.style.padding.top as u32)
+                    .saturating_add(layout.style.padding.bottom as u32)
+                    .max(24),
+                color: Color::rgb(196, 188, 172),
+            });
+        }
+
+        if is_hr {
+            let rule_y = content_y.saturating_add(1);
+            commands.push(DisplayCommand::FillRect {
+                x: box_x,
+                y: rule_y,
+                width: text_width.max(32),
+                height: 2,
+                color: Color::rgb(210, 205, 194),
             });
         }
 
@@ -171,6 +197,16 @@ fn paint_box(
                 });
             }
             for fragment in &line.fragments {
+                if let Some(background) = &fragment.background_color {
+                    commands.push(DisplayCommand::FillRect {
+                        x: cursor_x,
+                        y: *cursor_y,
+                        width: fragment.width as u32,
+                        height: line.height,
+                        color: parse_color(background),
+                    });
+                }
+
                 commands.push(DisplayCommand::DrawText {
                     x: cursor_x,
                     y: *cursor_y,
@@ -205,7 +241,7 @@ fn paint_box(
         paint_box(child, content_x, cursor_y, max_width, commands, link_regions);
     }
 
-    if !layout.lines.is_empty() || !layout.children.is_empty() {
+    if !layout.lines.is_empty() || !layout.children.is_empty() || is_hr {
         *cursor_y = (*cursor_y).saturating_add(layout.style.padding.bottom as u32);
         *cursor_y = (*cursor_y).saturating_add(layout.style.margin.bottom as u32);
     }
@@ -273,5 +309,34 @@ mod tests {
     fn parses_named_and_hex_colors() {
         assert_eq!(parse_color("navy"), super::Color::rgb(27, 54, 93));
         assert_eq!(parse_color("#ff0000"), super::Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn paints_semantic_document_accents() {
+        let document = html::parse(
+            r#"
+            <html>
+              <body>
+                <blockquote><p>quote</p></blockquote>
+                <p>use <code>cargo run</code></p>
+                <hr>
+              </body>
+            </html>
+            "#,
+        );
+        let stylesheet = style::collect_stylesheets(&document);
+        let styled = style::style_tree(&document, &stylesheet);
+        let layout = layout::build(&styled, 320);
+        let display_list = build_display_list(&layout);
+
+        let fill_rects = display_list
+            .commands
+            .iter()
+            .filter(|command| matches!(command, DisplayCommand::FillRect { .. }))
+            .count();
+        assert!(fill_rects >= 3);
+        assert!(display_list.commands.iter().any(|command| {
+            matches!(command, DisplayCommand::DrawText { text, .. } if text.contains("cargo run"))
+        }));
     }
 }

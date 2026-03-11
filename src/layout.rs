@@ -21,6 +21,7 @@ pub struct LayoutFragment {
     pub text: String,
     pub width: usize,
     pub color: String,
+    pub background_color: Option<String>,
     pub font_weight: FontWeight,
     pub underline: bool,
     pub font_size: usize,
@@ -80,6 +81,7 @@ pub fn build_with_measurer(
                             text: "\n".to_string(),
                             width: 0,
                             color: to_layout_style(node).color.clone(),
+                            background_color: to_layout_style(node).background_color.clone(),
                             font_weight: node.style.font_weight,
                             underline: node.style.underline,
                             font_size: node.style.font_size,
@@ -91,12 +93,27 @@ pub fn build_with_measurer(
                             text: "\n".to_string(),
                             width: 0,
                             color: to_layout_style(node).color.clone(),
+                            background_color: to_layout_style(node).background_color.clone(),
                             font_weight: node.style.font_weight,
                             underline: node.style.underline,
                             font_size: node.style.font_size,
                             line_height: node.style.line_height,
                             href: None,
                         }),
+                    }],
+                    children: Vec::new(),
+                    style: to_layout_style(node),
+                };
+            }
+            if element.tag_name == "hr" {
+                return LayoutBox {
+                    kind: LayoutKind::Block {
+                        tag_name: element.tag_name.clone(),
+                    },
+                    lines: vec![LayoutLine {
+                        fragments: Vec::new(),
+                        width: max_width.max(1),
+                        height: 2,
                     }],
                     children: Vec::new(),
                     style: to_layout_style(node),
@@ -161,6 +178,7 @@ pub fn build_with_measurer(
                     text: text.clone(),
                     width: 0,
                     color: "default".to_string(),
+                    background_color: None,
                     font_weight: FontWeight::Normal,
                     underline: false,
                     font_size: 16,
@@ -267,6 +285,7 @@ fn collect_inline_fragments(
                 text: text.clone(),
                 width: 0,
                 color: inherited_style.color.clone(),
+                background_color: inherited_style.background_color.clone(),
                 font_weight: inherited_style.font_weight,
                 underline: inherited_style.underline,
                 font_size: inherited_style.font_size,
@@ -280,6 +299,7 @@ fn collect_inline_fragments(
                     text: "\n".to_string(),
                     width: 0,
                     color: inherited_style.color.clone(),
+                    background_color: inherited_style.background_color.clone(),
                     font_weight: inherited_style.font_weight,
                     underline: false,
                     font_size: inherited_style.font_size,
@@ -442,6 +462,7 @@ fn fragment_with_text(template: &LayoutFragment, text: String) -> LayoutFragment
         text,
         width: 0,
         color: template.color.clone(),
+        background_color: template.background_color.clone(),
         font_weight: template.font_weight,
         underline: template.underline,
         font_size: template.font_size,
@@ -473,6 +494,7 @@ fn break_fragment(
                 text: std::mem::take(&mut current),
                 width: current_width,
                 color: fragment.color.clone(),
+                background_color: fragment.background_color.clone(),
                 font_weight: fragment.font_weight,
                 underline: fragment.underline,
                 font_size: fragment.font_size,
@@ -491,6 +513,7 @@ fn break_fragment(
             text: current,
             width: current_width,
             color: fragment.color.clone(),
+            background_color: fragment.background_color.clone(),
             font_weight: fragment.font_weight,
             underline: fragment.underline,
             font_size: fragment.font_size,
@@ -505,6 +528,7 @@ fn break_fragment(
 fn push_or_merge_fragment(fragments: &mut Vec<LayoutFragment>, fragment: LayoutFragment) {
     if let Some(last) = fragments.last_mut() {
         if last.color == fragment.color
+            && last.background_color == fragment.background_color
             && last.font_weight == fragment.font_weight
             && last.underline == fragment.underline
             && last.font_size == fragment.font_size
@@ -576,6 +600,7 @@ mod tests {
             text: "alpha beta gamma".to_string(),
             width: 0,
             color: "default".to_string(),
+            background_color: None,
             font_weight: FontWeight::Normal,
             underline: false,
             font_size: 16,
