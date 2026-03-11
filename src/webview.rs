@@ -17,7 +17,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 use wry::dpi::{LogicalPosition as WryLogicalPosition, LogicalSize as WryLogicalSize};
-use wry::{Rect, WebView, WebViewBuilder};
+use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder};
 
 const CHROME_HEIGHT: u32 = 112;
 const TAB_BAR_HEIGHT: u32 = 36;
@@ -55,6 +55,7 @@ enum BrowserEvent {
     PageFinished(String),
     TitleChanged(String),
     TopLevelUrlResolved(String),
+    OpenInNewTab(String),
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +64,8 @@ struct TabState {
     current_url: String,
     title: String,
     is_loading: bool,
+    history: Vec<String>,
+    history_index: usize,
 }
 
 struct WebViewApp {
@@ -103,6 +106,8 @@ impl WebViewApp {
                 current_url: initial_url.to_string(),
                 title: initial_source.to_string(),
                 is_loading: true,
+                history: vec![initial_url.to_string()],
+                history_index: 0,
             }],
             active_tab: 0,
             address_input: initial_source.to_string(),
@@ -378,6 +383,19 @@ impl WebViewApp {
         }
     }
 
+    fn active_history_url(&self) -> Option<String> {
+        self.active_tab()
+            .and_then(|tab| tab.history.get(tab.history_index))
+            .cloned()
+            .or_else(|| self.active_tab().map(|tab| tab.current_url.clone()))
+    }
+
+    fn record_active_tab_history(&mut self, url: &str) {
+        if let Some(tab) = self.active_tab_mut() {
+            record_history_for_tab(tab, url);
+        }
+    }
+
     fn navigate_to_input(&mut self, requested: String) {
         match source::normalize_browser_url(&requested) {
             Ok(url) => {
@@ -425,30 +443,52 @@ impl WebViewApp {
     }
 
     fn history_back(&mut self) {
+        let Some(target_url) = self.active_tab().and_then(|tab| {
+            tab.history_index
+                .checked_sub(1)
+                .and_then(|idx| tab.history.get(idx).cloned())
+        }) else {
+            return;
+        };
+
+        if let Some(tab) = self.active_tab_mut() {
+            tab.history_index = tab.history_index.saturating_sub(1);
+            tab.is_loading = true;
+            tab.current_url = target_url.clone();
+            tab.source = target_url.clone();
+        }
         if self.webview.is_some() {
-            if let Some(tab) = self.active_tab_mut() {
-                tab.is_loading = true;
-            }
             let _ = self
                 .webview
                 .as_ref()
                 .expect("checked above")
-                .evaluate_script("history.back();");
+                .load_url(&target_url);
             self.status_message = Some("Going back".to_string());
         }
         self.request_redraw();
     }
 
     fn history_forward(&mut self) {
+        let Some(target_url) = self.active_tab().and_then(|tab| {
+            tab.history
+                .get(tab.history_index.saturating_add(1))
+                .cloned()
+        }) else {
+            return;
+        };
+
+        if let Some(tab) = self.active_tab_mut() {
+            tab.history_index = (tab.history_index + 1).min(tab.history.len().saturating_sub(1));
+            tab.is_loading = true;
+            tab.current_url = target_url.clone();
+            tab.source = target_url.clone();
+        }
         if self.webview.is_some() {
-            if let Some(tab) = self.active_tab_mut() {
-                tab.is_loading = true;
-            }
             let _ = self
                 .webview
                 .as_ref()
                 .expect("checked above")
-                .evaluate_script("history.forward();");
+                .load_url(&target_url);
             self.status_message = Some("Going forward".to_string());
         }
         self.request_redraw();
@@ -475,6 +515,8 @@ impl WebViewApp {
             current_url: "about:blank".to_string(),
             title: "New Tab".to_string(),
             is_loading: true,
+            history: vec!["about:blank".to_string()],
+            history_index: 0,
         });
         self.active_tab = self.tabs.len().saturating_sub(1);
         self.address_input.clear();
@@ -510,6 +552,8 @@ impl WebViewApp {
                 tab.current_url = "about:blank".to_string();
                 tab.title = "New Tab".to_string();
                 tab.is_loading = true;
+                tab.history = vec!["about:blank".to_string()];
+                tab.history_index = 0;
             }
             self.active_tab = 0;
             self.address_input.clear();
@@ -537,8 +581,7 @@ impl WebViewApp {
         }
 
         let target_url = self
-            .active_tab()
-            .map(|tab| tab.current_url.clone())
+            .active_history_url()
             .unwrap_or_else(|| "about:blank".to_string());
         if self.webview.is_some() {
             let _ = self
@@ -562,8 +605,7 @@ impl WebViewApp {
         self.sync_address_from_active_tab();
         self.set_address_focus(false);
         let target_url = self
-            .active_tab()
-            .map(|tab| tab.current_url.clone())
+            .active_history_url()
             .unwrap_or_else(|| "about:blank".to_string());
         if let Some(tab) = self.active_tab_mut() {
             tab.is_loading = true;
@@ -700,6 +742,7 @@ impl WebViewApp {
                     tab.source = url.clone();
                     tab.is_loading = false;
                 }
+                self.record_active_tab_history(&url);
                 if !self.address_focus {
                     self.address_input = url;
                     self.address_cursor = self.address_char_count();
@@ -716,6 +759,7 @@ impl WebViewApp {
                     tab.current_url = url.clone();
                     tab.source = url.clone();
                 }
+                self.record_active_tab_history(&url);
                 if !self.address_focus {
                     self.address_input = url;
                     self.address_cursor = self.address_char_count();
@@ -727,6 +771,9 @@ impl WebViewApp {
                     tab.title = title;
                 }
                 self.update_window_title();
+            }
+            BrowserEvent::OpenInNewTab(url) => {
+                self.open_background_tab(url);
             }
         }
         self.request_redraw();
@@ -751,6 +798,19 @@ impl WebViewApp {
             }
         });
     }
+
+    fn open_background_tab(&mut self, requested: String) {
+        let normalized = source::normalize_browser_url(&requested).unwrap_or(requested.clone());
+        self.tabs.push(TabState {
+            source: normalized.clone(),
+            current_url: normalized.clone(),
+            title: requested,
+            is_loading: false,
+            history: vec![normalized],
+            history_index: 0,
+        });
+        self.status_message = Some("Opened link in new tab".to_string());
+    }
 }
 
 fn should_ignore_navigation_for_tab(tab: &TabState, url: &str) -> bool {
@@ -758,6 +818,22 @@ fn should_ignore_navigation_for_tab(tab: &TabState, url: &str) -> bool {
         && !is_internal_about_url(&tab.current_url)
         && !tab.source.is_empty())
         || is_cloudflare_challenge_url_for_other_host(tab, url)
+}
+
+fn record_history_for_tab(tab: &mut TabState, url: &str) {
+    if tab
+        .history
+        .get(tab.history_index)
+        .is_some_and(|current| current == url)
+    {
+        return;
+    }
+
+    if tab.history_index + 1 < tab.history.len() {
+        tab.history.truncate(tab.history_index + 1);
+    }
+    tab.history.push(url.to_string());
+    tab.history_index = tab.history.len().saturating_sub(1);
 }
 
 fn is_internal_about_url(url: &str) -> bool {
@@ -833,6 +909,13 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
             .with_navigation_handler(move |url| {
                 let _ = proxy.send_event(BrowserEvent::NavigationStarted(url));
                 true
+            })
+            .with_new_window_req_handler({
+                let proxy = self.proxy.clone();
+                move |url, _features| {
+                    let _ = proxy.send_event(BrowserEvent::OpenInNewTab(url));
+                    NewWindowResponse::Deny
+                }
             })
             .with_on_page_load_handler({
                 let proxy = self.proxy.clone();
@@ -1988,8 +2071,9 @@ mod tests {
     use super::{
         address_bar_cursor_from_position, address_bar_hit_test, address_slice,
         build_address_text_layout, nav_button_hit_test, new_tab_button_hit_test,
-        parse_js_string_result, sanitize_clipboard_text, should_ignore_navigation_for_tab,
-        tab_close_hit_test, tab_hit_test, NavAction, TabState, TextRasterizer,
+        parse_js_string_result, record_history_for_tab, sanitize_clipboard_text,
+        should_ignore_navigation_for_tab, tab_close_hit_test, tab_hit_test, NavAction, TabState,
+        TextRasterizer,
     };
 
     #[test]
@@ -2033,6 +2117,8 @@ mod tests {
             current_url: "https://example.com/".to_string(),
             title: "Example".to_string(),
             is_loading: true,
+            history: vec!["https://example.com/".to_string()],
+            history_index: 0,
         };
         assert!(should_ignore_navigation_for_tab(&tab, "about:blank"));
         assert!(should_ignore_navigation_for_tab(&tab, "about:srcdoc"));
@@ -2057,6 +2143,31 @@ mod tests {
             Some("https://example.com/a\n".to_string())
         );
         assert_eq!(parse_js_string_result("null"), None);
+    }
+
+    #[test]
+    fn records_tab_history_without_duplicates() {
+        let mut tab = TabState {
+            source: "https://example.com".to_string(),
+            current_url: "https://example.com/".to_string(),
+            title: "Example".to_string(),
+            is_loading: false,
+            history: vec!["https://example.com/".to_string()],
+            history_index: 0,
+        };
+
+        record_history_for_tab(&mut tab, "https://example.com/");
+        record_history_for_tab(&mut tab, "https://example.com/docs");
+        record_history_for_tab(&mut tab, "https://example.com/docs");
+
+        assert_eq!(
+            tab.history,
+            vec![
+                "https://example.com/".to_string(),
+                "https://example.com/docs".to_string()
+            ]
+        );
+        assert_eq!(tab.history_index, 1);
     }
 
     #[test]

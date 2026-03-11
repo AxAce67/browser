@@ -77,6 +77,7 @@ WebView controls:
 - Click a tab: switch pages
 - Click `x` on a tab: close it
 - Click `+`: open a new tab
+- Links that request a new window open in a new tab
 - Click `Back` / `Forward` / `Reload`: basic navigation
 - Click address bar: focus it
 - Drag in address bar: select text
