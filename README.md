@@ -48,6 +48,7 @@ cargo run -- --gui examples/welcome.html
 GUI controls:
 
 - Click address bar: focus it
+- Drag in address bar: select text
 - Click link text: navigate to its `href`
 - Mouse wheel: vertical scroll
 - `ArrowUp` / `ArrowDown`: small scroll
@@ -58,6 +59,10 @@ GUI controls:
 - `Cmd+C` / `Ctrl+C`: copy address
 - `Cmd+X` / `Ctrl+X`: cut address
 - `Cmd+V` / `Ctrl+V`: paste into address bar
+- `ArrowLeft` / `ArrowRight`: move address caret
+- `Shift+ArrowLeft` / `Shift+ArrowRight`: expand address selection
+- `Delete` / `Backspace`: delete in address bar
+- `Home` / `End` while editing: move caret to start/end
 - `Enter`: load typed path or URL
 - `Esc`: cancel address editing
 - `R`: reload current page
