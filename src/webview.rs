@@ -21,6 +21,10 @@ use wry::{Rect, WebView, WebViewBuilder};
 const CHROME_HEIGHT: u32 = 76;
 const ADDRESS_BAR_HEIGHT: u32 = 34;
 const ADDRESS_BAR_PADDING: u32 = 12;
+const NAV_BUTTON_SIZE: u32 = 28;
+const NAV_BUTTON_SPACING: u32 = 10;
+const NAV_BUTTON_MARGIN_LEFT: u32 = 12;
+const ADDRESS_BAR_LEFT_OFFSET: u32 = 118;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 1200;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 820;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
@@ -63,6 +67,7 @@ struct WebViewApp {
     address_drag_active: bool,
     preedit_text: String,
     status_message: Option<String>,
+    is_loading: bool,
     page_title: String,
     viewport_width: u32,
     viewport_height: u32,
@@ -92,6 +97,7 @@ impl WebViewApp {
             address_drag_active: false,
             preedit_text: String::new(),
             status_message: Some("Loading page".to_string()),
+            is_loading: true,
             page_title: initial_source.to_string(),
             viewport_width: DEFAULT_VIEWPORT_WIDTH,
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
@@ -115,6 +121,7 @@ impl WebViewApp {
             frame,
             self.viewport_width,
             self.viewport_height,
+            self.is_loading,
             &self.address_input,
             &self.preedit_text,
             self.address_focus,
@@ -345,6 +352,7 @@ impl WebViewApp {
                             self.address_input = requested.clone();
                             self.current_source = requested;
                             self.current_url = url.clone();
+                            self.is_loading = true;
                             self.status_message = Some(format!("Loading {url}"));
                             self.set_address_focus(false);
                         }
@@ -363,7 +371,9 @@ impl WebViewApp {
     fn reload(&mut self) {
         if let Some(webview) = self.webview.as_ref() {
             self.status_message = Some("Reloading page".to_string());
+            self.is_loading = true;
             if let Err(err) = webview.reload() {
+                self.is_loading = false;
                 self.status_message = Some(format!("failed to reload page: {err}"));
             }
         }
@@ -373,6 +383,7 @@ impl WebViewApp {
     fn history_back(&mut self) {
         if let Some(webview) = self.webview.as_ref() {
             let _ = webview.evaluate_script("history.back();");
+            self.is_loading = true;
             self.status_message = Some("Going back".to_string());
         }
         self.request_redraw();
@@ -381,6 +392,7 @@ impl WebViewApp {
     fn history_forward(&mut self) {
         if let Some(webview) = self.webview.as_ref() {
             let _ = webview.evaluate_script("history.forward();");
+            self.is_loading = true;
             self.status_message = Some("Going forward".to_string());
         }
         self.request_redraw();
@@ -398,6 +410,15 @@ impl WebViewApp {
     }
 
     fn handle_primary_click(&mut self, position: PhysicalPosition<f64>) {
+        if let Some(action) = nav_button_hit_test(position.x, position.y) {
+            match action {
+                NavAction::Back => self.history_back(),
+                NavAction::Forward => self.history_forward(),
+                NavAction::Reload => self.reload(),
+            }
+            return;
+        }
+
         if address_bar_hit_test(position.x, position.y, self.viewport_width) {
             self.set_address_focus(true);
             let caret = address_bar_cursor_from_position(
@@ -459,6 +480,7 @@ impl WebViewApp {
         match event {
             BrowserEvent::NavigationStarted(url) => {
                 self.current_url = url.clone();
+                self.is_loading = true;
                 if !self.address_focus {
                     self.address_input = url.clone();
                     self.address_cursor = self.address_char_count();
@@ -469,6 +491,7 @@ impl WebViewApp {
             BrowserEvent::PageFinished(url) => {
                 self.current_url = url.clone();
                 self.current_source = url.clone();
+                self.is_loading = false;
                 if !self.address_focus {
                     self.address_input = url;
                     self.address_cursor = self.address_char_count();
@@ -883,6 +906,7 @@ fn draw_chrome(
     frame: &mut [u8],
     width: u32,
     height: u32,
+    is_loading: bool,
     address_input: &str,
     preedit_text: &str,
     address_focus: bool,
@@ -901,13 +925,53 @@ fn draw_chrome(
         CHROME_HEIGHT as i32,
         Color::rgb(232, 228, 220),
     );
+    for action in [NavAction::Back, NavAction::Forward, NavAction::Reload] {
+        let rect = nav_button_rect(action);
+        draw_rect(
+            frame,
+            width,
+            height,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            if is_loading && matches!(action, NavAction::Reload) {
+                Color::rgb(224, 232, 248)
+            } else {
+                Color::rgb(246, 243, 236)
+            },
+        );
+
+        let symbol = match action {
+            NavAction::Back => "<",
+            NavAction::Forward => ">",
+            NavAction::Reload => "R",
+        };
+        let symbol_color = if is_loading && matches!(action, NavAction::Reload) {
+            Color::rgb(36, 88, 164)
+        } else {
+            Color::rgb(88, 92, 100)
+        };
+        text_rasterizer.draw_text(
+            frame,
+            width,
+            height,
+            rect.x + 9,
+            rect.y + 6,
+            symbol,
+            symbol_color,
+            FontWeight::Bold,
+            16.0,
+        );
+    }
+
     draw_rect(
         frame,
         width,
         height,
-        ADDRESS_BAR_PADDING as i32,
+        ADDRESS_BAR_LEFT_OFFSET as i32,
         12,
-        width.saturating_sub(ADDRESS_BAR_PADDING * 2) as i32,
+        width.saturating_sub(ADDRESS_BAR_LEFT_OFFSET + ADDRESS_BAR_PADDING) as i32,
         ADDRESS_BAR_HEIGHT as i32,
         if address_focus {
             Color::rgb(255, 255, 255)
@@ -974,13 +1038,18 @@ fn draw_chrome(
     }
 
     if let Some(message) = status_message {
+        let rendered_message = if is_loading {
+            format!("{message}...")
+        } else {
+            message.to_string()
+        };
         text_rasterizer.draw_text(
             frame,
             width,
             height,
             (ADDRESS_BAR_PADDING + 8) as i32,
             52,
-            message,
+            &rendered_message,
             Color::rgb(96, 100, 110),
             FontWeight::Normal,
             13.0,
@@ -1226,7 +1295,7 @@ fn build_address_text_layout(
     preedit_text: &str,
     address_focus: bool,
 ) -> AddressTextLayout {
-    let text_x = (ADDRESS_BAR_PADDING + 8) as i32;
+    let text_x = (ADDRESS_BAR_LEFT_OFFSET + 8) as i32;
     let text_y = 20;
     let prefix = if address_focus { "> " } else { "" };
     let display_text = format!("{prefix}{address_input}{preedit_text}");
@@ -1303,11 +1372,54 @@ impl AddressTextLayout {
 }
 
 fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
-    let min_x = ADDRESS_BAR_PADDING as f64;
+    let min_x = ADDRESS_BAR_LEFT_OFFSET as f64;
     let max_x = viewport_width.saturating_sub(ADDRESS_BAR_PADDING) as f64;
     let min_y = 12.0;
     let max_y = (12 + ADDRESS_BAR_HEIGHT) as f64;
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavAction {
+    Back,
+    Forward,
+    Reload,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ButtonRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
+
+fn nav_button_rect(action: NavAction) -> ButtonRect {
+    let index = match action {
+        NavAction::Back => 0,
+        NavAction::Forward => 1,
+        NavAction::Reload => 2,
+    };
+    ButtonRect {
+        x: (NAV_BUTTON_MARGIN_LEFT + index * (NAV_BUTTON_SIZE + NAV_BUTTON_SPACING)) as i32,
+        y: 15,
+        width: NAV_BUTTON_SIZE as i32,
+        height: NAV_BUTTON_SIZE as i32,
+    }
+}
+
+fn nav_button_hit_test(x: f64, y: f64) -> Option<NavAction> {
+    for action in [NavAction::Back, NavAction::Forward, NavAction::Reload] {
+        let rect = nav_button_rect(action);
+        if x >= rect.x as f64
+            && x <= (rect.x + rect.width) as f64
+            && y >= rect.y as f64
+            && y <= (rect.y + rect.height) as f64
+        {
+            return Some(action);
+        }
+    }
+    None
 }
 
 fn address_bar_cursor_from_position(text_rasterizer: &TextRasterizer, text: &str, x: f64) -> usize {
@@ -1336,20 +1448,29 @@ fn sanitize_clipboard_text(text: &str) -> String {
 mod tests {
     use super::{
         address_bar_cursor_from_position, address_bar_hit_test, address_slice,
-        build_address_text_layout, sanitize_clipboard_text, TextRasterizer,
+        build_address_text_layout, nav_button_hit_test, sanitize_clipboard_text, NavAction,
+        TextRasterizer,
     };
 
     #[test]
     fn detects_address_bar_hits() {
-        assert!(address_bar_hit_test(30.0, 20.0, 900));
+        assert!(address_bar_hit_test(140.0, 20.0, 900));
         assert!(!address_bar_hit_test(30.0, 90.0, 900));
+    }
+
+    #[test]
+    fn detects_nav_button_hits() {
+        assert_eq!(nav_button_hit_test(18.0, 20.0), Some(NavAction::Back));
+        assert_eq!(nav_button_hit_test(58.0, 20.0), Some(NavAction::Forward));
+        assert_eq!(nav_button_hit_test(98.0, 20.0), Some(NavAction::Reload));
+        assert_eq!(nav_button_hit_test(200.0, 20.0), None);
     }
 
     #[test]
     fn cursor_hit_testing_maps_points_to_character_indices() {
         let text_rasterizer = TextRasterizer::load();
         let text = "hello";
-        let start_x = (super::ADDRESS_BAR_PADDING + 8) as f64;
+        let start_x = (super::ADDRESS_BAR_LEFT_OFFSET + 8) as f64;
 
         assert_eq!(
             address_bar_cursor_from_position(&text_rasterizer, text, start_x + 2.0),

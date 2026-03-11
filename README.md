@@ -74,6 +74,7 @@ Toy GUI controls:
 
 WebView controls:
 
+- Click `Back` / `Forward` / `Reload`: basic navigation
 - Click address bar: focus it
 - Drag in address bar: select text
 - `Cmd+L` / `Ctrl+L`: focus address bar
