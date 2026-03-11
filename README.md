@@ -75,12 +75,14 @@ Toy GUI controls:
 WebView controls:
 
 - Click a tab: switch pages
+- Click `x` on a tab: close it
 - Click `+`: open a new tab
 - Click `Back` / `Forward` / `Reload`: basic navigation
 - Click address bar: focus it
 - Drag in address bar: select text
 - `Cmd+L` / `Ctrl+L`: focus address bar
 - `Cmd+T` / `Ctrl+T`: open a new tab
+- `Cmd+W` / `Ctrl+W`: close current tab
 - `Cmd+A` / `Ctrl+A`: select whole address
 - `Cmd+C` / `Ctrl+C`: copy address
 - `Cmd+X` / `Ctrl+X`: cut address

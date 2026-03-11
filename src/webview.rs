@@ -497,6 +497,60 @@ impl WebViewApp {
         self.request_redraw();
     }
 
+    fn close_tab(&mut self, tab_index: usize) {
+        if tab_index >= self.tabs.len() {
+            return;
+        }
+
+        if self.tabs.len() == 1 {
+            if let Some(tab) = self.tabs.get_mut(0) {
+                tab.source.clear();
+                tab.current_url = "about:blank".to_string();
+                tab.title = "New Tab".to_string();
+                tab.is_loading = true;
+            }
+            self.active_tab = 0;
+            self.address_input.clear();
+            self.address_cursor = 0;
+            self.clear_address_selection();
+            if self.webview.is_some() {
+                let _ = self
+                    .webview
+                    .as_ref()
+                    .expect("checked above")
+                    .load_url("about:blank");
+            }
+            self.status_message = Some("Reset current tab".to_string());
+            self.set_address_focus(true);
+            self.update_window_title();
+            self.request_redraw();
+            return;
+        }
+
+        self.tabs.remove(tab_index);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len().saturating_sub(1);
+        } else if tab_index < self.active_tab {
+            self.active_tab = self.active_tab.saturating_sub(1);
+        }
+
+        let target_url = self
+            .active_tab()
+            .map(|tab| tab.current_url.clone())
+            .unwrap_or_else(|| "about:blank".to_string());
+        if self.webview.is_some() {
+            let _ = self
+                .webview
+                .as_ref()
+                .expect("checked above")
+                .load_url(&target_url);
+        }
+        self.sync_address_from_active_tab();
+        self.status_message = Some("Closed tab".to_string());
+        self.update_window_title();
+        self.request_redraw();
+    }
+
     fn switch_to_tab(&mut self, tab_index: usize) {
         if tab_index >= self.tabs.len() || tab_index == self.active_tab {
             return;
@@ -534,6 +588,13 @@ impl WebViewApp {
     fn handle_primary_click(&mut self, position: PhysicalPosition<f64>) {
         if new_tab_button_hit_test(position.x, position.y, self.viewport_width) {
             self.open_new_tab();
+            return;
+        }
+
+        if let Some(tab_index) =
+            tab_close_hit_test(position.x, position.y, self.viewport_width, self.tabs.len())
+        {
+            self.close_tab(tab_index);
             return;
         }
 
@@ -613,6 +674,9 @@ impl WebViewApp {
     fn handle_browser_event(&mut self, event: BrowserEvent) {
         match event {
             BrowserEvent::NavigationStarted(url) => {
+                if self.should_ignore_navigation_event(&url) {
+                    return;
+                }
                 if let Some(tab) = self.active_tab_mut() {
                     tab.current_url = url.clone();
                     tab.source = url.clone();
@@ -626,6 +690,9 @@ impl WebViewApp {
                 self.status_message = Some(format!("Loading {url}"));
             }
             BrowserEvent::PageFinished(url) => {
+                if self.should_ignore_navigation_event(&url) {
+                    return;
+                }
                 if let Some(tab) = self.active_tab_mut() {
                     tab.current_url = url.clone();
                     tab.source = url.clone();
@@ -647,6 +714,18 @@ impl WebViewApp {
         }
         self.request_redraw();
     }
+
+    fn should_ignore_navigation_event(&self, url: &str) -> bool {
+        let Some(tab) = self.active_tab() else {
+            return false;
+        };
+
+        should_ignore_navigation_for_tab(tab, url)
+    }
+}
+
+fn should_ignore_navigation_for_tab(tab: &TabState, url: &str) -> bool {
+    url == "about:blank" && tab.current_url != "about:blank" && !tab.source.is_empty()
 }
 
 impl ApplicationHandler<BrowserEvent> for WebViewApp {
@@ -841,6 +920,14 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
                     return;
                 }
 
+                if matches!(event.logical_key.as_ref(), Key::Character(ch) if ch.eq_ignore_ascii_case("w"))
+                    && (self.modifiers.control_key() || self.modifiers.super_key())
+                {
+                    let current = self.active_tab;
+                    self.close_tab(current);
+                    return;
+                }
+
                 if self.address_focus {
                     if let Key::Character(text) = event.logical_key.as_ref() {
                         if self.handle_address_shortcut(text) {
@@ -909,6 +996,13 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
                 }
 
                 match event.logical_key.as_ref() {
+                    Key::Character(ch)
+                        if ch.eq_ignore_ascii_case("w")
+                            && (self.modifiers.control_key() || self.modifiers.super_key()) =>
+                    {
+                        let current = self.active_tab;
+                        self.close_tab(current);
+                    }
                     Key::Character(ch)
                         if ch.eq_ignore_ascii_case("r")
                             && (self.modifiers.control_key() || self.modifiers.super_key()) =>
@@ -1125,6 +1219,33 @@ fn draw_chrome(
                     FontWeight::Normal
                 },
                 14.0,
+            );
+
+            let close_rect = tab_close_rect(index, width, tabs.len());
+            draw_rect(
+                frame,
+                width,
+                height,
+                close_rect.x,
+                close_rect.y,
+                close_rect.width,
+                close_rect.height,
+                if index == active_tab {
+                    Color::rgb(233, 228, 220)
+                } else {
+                    Color::rgb(214, 209, 201)
+                },
+            );
+            text_rasterizer.draw_text(
+                frame,
+                width,
+                height,
+                close_rect.x + 4,
+                close_rect.y + 1,
+                "x",
+                Color::rgb(92, 96, 104),
+                FontWeight::Bold,
+                12.0,
             );
         }
     }
@@ -1684,6 +1805,35 @@ fn tab_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> Option
     None
 }
 
+fn tab_close_rect(index: usize, viewport_width: u32, tab_count: usize) -> ButtonRect {
+    let rect = tab_rect(index, viewport_width, tab_count).unwrap_or(ButtonRect {
+        x: 0,
+        y: 0,
+        width: 0,
+        height: 0,
+    });
+    ButtonRect {
+        x: rect.x + rect.width - 20,
+        y: rect.y + 4,
+        width: 14,
+        height: 14,
+    }
+}
+
+fn tab_close_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> Option<usize> {
+    for index in 0..tab_count {
+        let rect = tab_close_rect(index, viewport_width, tab_count);
+        if x >= rect.x as f64
+            && x <= (rect.x + rect.width) as f64
+            && y >= rect.y as f64
+            && y <= (rect.y + rect.height) as f64
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
 fn new_tab_button_rect(viewport_width: u32) -> ButtonRect {
     ButtonRect {
         x: viewport_width.saturating_sub(ADDRESS_BAR_PADDING + NEW_TAB_BUTTON_SIZE) as i32,
@@ -1742,7 +1892,8 @@ mod tests {
     use super::{
         address_bar_cursor_from_position, address_bar_hit_test, address_slice,
         build_address_text_layout, nav_button_hit_test, new_tab_button_hit_test,
-        sanitize_clipboard_text, tab_hit_test, NavAction, TextRasterizer,
+        sanitize_clipboard_text, should_ignore_navigation_for_tab, tab_close_hit_test,
+        tab_hit_test, NavAction, TabState, TextRasterizer,
     };
 
     #[test]
@@ -1770,6 +1921,28 @@ mod tests {
     fn detects_new_tab_button_hits() {
         assert!(new_tab_button_hit_test(870.0, 18.0, 900));
         assert!(!new_tab_button_hit_test(820.0, 18.0, 900));
+    }
+
+    #[test]
+    fn detects_tab_close_hits() {
+        assert_eq!(tab_close_hit_test(216.0, 14.0, 900, 2), Some(0));
+        assert_eq!(tab_close_hit_test(446.0, 14.0, 900, 2), Some(1));
+        assert_eq!(tab_close_hit_test(700.0, 14.0, 900, 2), None);
+    }
+
+    #[test]
+    fn ignores_stale_about_blank_events_for_non_blank_tabs() {
+        let tab = TabState {
+            source: "https://example.com".to_string(),
+            current_url: "https://example.com/".to_string(),
+            title: "Example".to_string(),
+            is_loading: true,
+        };
+        assert!(should_ignore_navigation_for_tab(&tab, "about:blank"));
+        assert!(!should_ignore_navigation_for_tab(
+            &tab,
+            "https://example.com/next"
+        ));
     }
 
     #[test]
