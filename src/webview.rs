@@ -725,7 +725,11 @@ impl WebViewApp {
 }
 
 fn should_ignore_navigation_for_tab(tab: &TabState, url: &str) -> bool {
-    url == "about:blank" && tab.current_url != "about:blank" && !tab.source.is_empty()
+    is_internal_about_url(url) && !is_internal_about_url(&tab.current_url) && !tab.source.is_empty()
+}
+
+fn is_internal_about_url(url: &str) -> bool {
+    url == "about:blank" || url.starts_with("about:srcdoc")
 }
 
 impl ApplicationHandler<BrowserEvent> for WebViewApp {
@@ -1939,6 +1943,7 @@ mod tests {
             is_loading: true,
         };
         assert!(should_ignore_navigation_for_tab(&tab, "about:blank"));
+        assert!(should_ignore_navigation_for_tab(&tab, "about:srcdoc"));
         assert!(!should_ignore_navigation_for_tab(
             &tab,
             "https://example.com/next"
