@@ -88,6 +88,7 @@ struct WebViewApp {
     status_message: Option<String>,
     viewport_width: u32,
     viewport_height: u32,
+    ui_scale: f64,
     modifiers: ModifiersState,
     cursor_position: Option<PhysicalPosition<f64>>,
     address_blink_started_at: Instant,
@@ -121,6 +122,7 @@ impl WebViewApp {
             status_message: Some("Loading page".to_string()),
             viewport_width: DEFAULT_VIEWPORT_WIDTH,
             viewport_height: DEFAULT_VIEWPORT_HEIGHT,
+            ui_scale: 1.0,
             modifiers: ModifiersState::empty(),
             cursor_position: None,
             address_blink_started_at: Instant::now(),
@@ -142,6 +144,7 @@ impl WebViewApp {
             frame,
             self.viewport_width,
             self.viewport_height,
+            self.ui_scale,
             &self.tabs,
             self.active_tab,
             active_loading,
@@ -632,26 +635,34 @@ impl WebViewApp {
     }
 
     fn handle_primary_click(&mut self, position: PhysicalPosition<f64>) {
-        if new_tab_button_hit_test(position.x, position.y, self.viewport_width) {
+        if new_tab_button_hit_test(position.x, position.y, self.viewport_width, self.ui_scale) {
             self.open_new_tab();
             return;
         }
 
-        if let Some(tab_index) =
-            tab_close_hit_test(position.x, position.y, self.viewport_width, self.tabs.len())
-        {
+        if let Some(tab_index) = tab_close_hit_test(
+            position.x,
+            position.y,
+            self.viewport_width,
+            self.tabs.len(),
+            self.ui_scale,
+        ) {
             self.close_tab(tab_index);
             return;
         }
 
-        if let Some(tab_index) =
-            tab_hit_test(position.x, position.y, self.viewport_width, self.tabs.len())
-        {
+        if let Some(tab_index) = tab_hit_test(
+            position.x,
+            position.y,
+            self.viewport_width,
+            self.tabs.len(),
+            self.ui_scale,
+        ) {
             self.switch_to_tab(tab_index);
             return;
         }
 
-        if let Some(action) = nav_button_hit_test(position.x, position.y) {
+        if let Some(action) = nav_button_hit_test(position.x, position.y, self.ui_scale) {
             match action {
                 NavAction::Back => self.history_back(),
                 NavAction::Forward => self.history_forward(),
@@ -660,13 +671,14 @@ impl WebViewApp {
             return;
         }
 
-        if address_bar_hit_test(position.x, position.y, self.viewport_width) {
+        if address_bar_hit_test(position.x, position.y, self.viewport_width, self.ui_scale) {
             self.set_address_focus(true);
             let caret = address_bar_cursor_from_position(
                 &self.text_rasterizer,
                 &self.address_input,
                 position.x,
                 self.viewport_width,
+                self.ui_scale,
             );
             self.address_cursor = caret;
             self.clear_address_selection();
@@ -690,6 +702,7 @@ impl WebViewApp {
             &self.address_input,
             position.x,
             self.viewport_width,
+            self.ui_scale,
         );
         if self.address_selection_anchor.is_none() {
             self.address_selection_anchor = Some(self.address_cursor);
@@ -882,6 +895,7 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
         let window_size = window.inner_size();
         self.viewport_width = window_size.width.max(1);
         self.viewport_height = window_size.height.max(1);
+        self.ui_scale = window.scale_factor();
 
         let surface_texture =
             SurfaceTexture::new(window_size.width, window_size.height, window.clone());
@@ -1010,6 +1024,10 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
             WindowEvent::Resized(size) => {
                 self.viewport_width = size.width.max(1);
                 self.viewport_height = size.height.max(1);
+                self.ui_scale = self
+                    .window
+                    .as_ref()
+                    .map_or(1.0, |window| window.scale_factor());
                 if let Some(pixels) = self.pixels.as_mut() {
                     if let Err(err) = pixels.resize_surface(size.width, size.height) {
                         eprintln!("failed to resize surface: {err}");
@@ -1029,7 +1047,8 @@ impl ApplicationHandler<BrowserEvent> for WebViewApp {
                 }
                 self.request_redraw();
             }
-            WindowEvent::ScaleFactorChanged { .. } => {
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.ui_scale = scale_factor;
                 if let Err(err) = self.resize_webview() {
                     eprintln!("{err}");
                     event_loop.exit();
@@ -1295,6 +1314,7 @@ fn draw_chrome(
     frame: &mut [u8],
     width: u32,
     height: u32,
+    scale: f64,
     tabs: &[TabState],
     active_tab: usize,
     is_loading: bool,
@@ -1306,6 +1326,15 @@ fn draw_chrome(
     caret_visible: bool,
     status_message: Option<&str>,
 ) {
+    let chrome_height = scale_u32(CHROME_HEIGHT, scale);
+    let tab_bar_height = scale_u32(TAB_BAR_HEIGHT, scale);
+    let toolbar_divider = scale_i32(1, scale);
+    let tab_corner = scale_i32(9, scale);
+    let button_corner = scale_i32(15, scale);
+    let small_corner = scale_i32(8, scale);
+    let close_corner = scale_i32(7, scale);
+    let address_corner = scale_i32(17, scale);
+    let status_corner = scale_i32(12, scale);
     let chrome_background = Color::rgb(244, 240, 234);
     let tab_strip_color = Color::rgb(47, 52, 63);
     let toolbar_color = Color::rgb(232, 228, 220);
@@ -1332,7 +1361,7 @@ fn draw_chrome(
         0,
         0,
         width as i32,
-        CHROME_HEIGHT as i32,
+        chrome_height as i32,
         chrome_background,
     );
     draw_rect(
@@ -1342,7 +1371,7 @@ fn draw_chrome(
         0,
         0,
         width as i32,
-        TAB_BAR_HEIGHT as i32,
+        tab_bar_height as i32,
         tab_strip_color,
     );
     draw_rect(
@@ -1350,14 +1379,14 @@ fn draw_chrome(
         width,
         height,
         0,
-        TAB_BAR_HEIGHT as i32,
+        tab_bar_height as i32,
         width as i32,
-        CHROME_HEIGHT.saturating_sub(TAB_BAR_HEIGHT) as i32,
+        chrome_height.saturating_sub(tab_bar_height) as i32,
         toolbar_color,
     );
 
     for (index, tab) in tabs.iter().enumerate() {
-        if let Some(rect) = tab_rect(index, width, tabs.len()) {
+        if let Some(rect) = tab_rect(index, width, tabs.len(), scale) {
             draw_rounded_rect(
                 frame,
                 width,
@@ -1366,7 +1395,7 @@ fn draw_chrome(
                 rect.y,
                 rect.width,
                 rect.height,
-                9,
+                tab_corner,
                 if index == active_tab {
                     active_tab_color
                 } else {
@@ -1378,10 +1407,10 @@ fn draw_chrome(
                     frame,
                     width,
                     height,
-                    rect.x + 1,
-                    rect.y + rect.height - 3,
-                    rect.width - 2,
-                    3,
+                    rect.x + scale_i32(1, scale),
+                    rect.y + rect.height - scale_i32(3, scale),
+                    rect.width - scale_i32(2, scale),
+                    scale_i32(3, scale),
                     active_tab_color,
                 );
             }
@@ -1400,8 +1429,8 @@ fn draw_chrome(
                 frame,
                 width,
                 height,
-                rect.x + 10,
-                rect.y + 7,
+                rect.x + scale_i32(10, scale),
+                rect.y + scale_i32(7, scale),
                 &label,
                 if index == active_tab {
                     Color::rgb(45, 50, 58)
@@ -1413,10 +1442,10 @@ fn draw_chrome(
                 } else {
                     FontWeight::Normal
                 },
-                14.0,
+                14.0 * scale as f32,
             );
 
-            let close_rect = tab_close_rect(index, width, tabs.len());
+            let close_rect = tab_close_rect(index, width, tabs.len(), scale);
             draw_rounded_rect(
                 frame,
                 width,
@@ -1425,7 +1454,7 @@ fn draw_chrome(
                 close_rect.y,
                 close_rect.width,
                 close_rect.height,
-                7,
+                close_corner,
                 if index == active_tab {
                     Color::rgb(236, 231, 223)
                 } else {
@@ -1436,8 +1465,8 @@ fn draw_chrome(
                 frame,
                 width,
                 height,
-                close_rect.x + 3,
-                close_rect.y + 1,
+                close_rect.x + scale_i32(3, scale),
+                close_rect.y + scale_i32(1, scale),
                 "×",
                 if index == active_tab {
                     Color::rgb(92, 96, 104)
@@ -1445,12 +1474,12 @@ fn draw_chrome(
                     Color::rgb(248, 248, 249)
                 },
                 FontWeight::Bold,
-                13.0,
+                13.0 * scale as f32,
             );
         }
     }
 
-    let plus_rect = new_tab_button_rect(width);
+    let plus_rect = new_tab_button_rect(width, scale);
     draw_rounded_rect(
         frame,
         width,
@@ -1459,19 +1488,19 @@ fn draw_chrome(
         plus_rect.y,
         plus_rect.width,
         plus_rect.height,
-        8,
+        small_corner,
         Color::rgb(84, 93, 110),
     );
     text_rasterizer.draw_text(
         frame,
         width,
         height,
-        plus_rect.x + 7,
-        plus_rect.y + 4,
+        plus_rect.x + scale_i32(7, scale),
+        plus_rect.y + scale_i32(4, scale),
         "+",
         Color::rgb(248, 248, 249),
         FontWeight::Bold,
-        18.0,
+        18.0 * scale as f32,
     );
 
     draw_rect(
@@ -1479,14 +1508,14 @@ fn draw_chrome(
         width,
         height,
         0,
-        TAB_BAR_HEIGHT as i32,
+        tab_bar_height as i32,
         width as i32,
-        1,
+        toolbar_divider,
         Color::rgb(78, 84, 96),
     );
 
     for action in [NavAction::Back, NavAction::Forward, NavAction::Reload] {
-        let rect = nav_button_rect(action);
+        let rect = nav_button_rect(action, scale);
         draw_rounded_rect(
             frame,
             width,
@@ -1495,7 +1524,7 @@ fn draw_chrome(
             rect.y,
             rect.width,
             rect.height,
-            15,
+            button_corner,
             if is_loading && matches!(action, NavAction::Reload) {
                 Color::rgb(218, 228, 247)
             } else {
@@ -1510,8 +1539,8 @@ fn draw_chrome(
             rect.y,
             rect.width,
             rect.height,
-            15,
-            1,
+            button_corner,
+            toolbar_divider,
             if is_loading && matches!(action, NavAction::Reload) {
                 Color::rgb(139, 164, 210)
             } else {
@@ -1533,16 +1562,16 @@ fn draw_chrome(
             frame,
             width,
             height,
-            rect.x + 7,
-            rect.y + 5,
+            rect.x + scale_i32(7, scale),
+            rect.y + scale_i32(5, scale),
             symbol,
             symbol_color,
             FontWeight::Bold,
-            15.0,
+            15.0 * scale as f32,
         );
     }
 
-    let address_rect = address_bar_rect(width);
+    let address_rect = address_bar_rect(width, scale);
     draw_rounded_rect(
         frame,
         width,
@@ -1551,7 +1580,7 @@ fn draw_chrome(
         address_rect.y,
         address_rect.width,
         address_rect.height,
-        17,
+        address_corner,
         address_fill,
     );
     draw_rounded_border(
@@ -1562,12 +1591,13 @@ fn draw_chrome(
         address_rect.y,
         address_rect.width,
         address_rect.height,
-        17,
-        1,
+        address_corner,
+        toolbar_divider,
         address_border,
     );
 
-    let layout = build_address_text_layout(text_rasterizer, address_input, preedit_text, width);
+    let layout =
+        build_address_text_layout(text_rasterizer, address_input, preedit_text, width, scale);
 
     if let Some((start, end)) = address_selection {
         let selection_x = layout.x_for_char_index(text_rasterizer, start);
@@ -1579,9 +1609,9 @@ fn draw_chrome(
             width,
             height,
             selection_x,
-            address_rect.y + 4,
+            address_rect.y + scale_i32(4, scale),
             selection_width.max(1),
-            address_rect.height - 8,
+            address_rect.height - scale_i32(8, scale),
             Color::rgb(205, 222, 246),
         );
     }
@@ -1616,9 +1646,9 @@ fn draw_chrome(
             width,
             height,
             caret_x,
-            address_rect.y + 6,
-            2,
-            address_rect.height - 12,
+            address_rect.y + scale_i32(6, scale),
+            scale_i32(2, scale),
+            address_rect.height - scale_i32(12, scale),
             Color::rgb(46, 50, 56),
         );
     }
@@ -1629,7 +1659,7 @@ fn draw_chrome(
         } else {
             message.to_string()
         };
-        let status_rect = status_chip_rect(width);
+        let status_rect = status_chip_rect(width, scale);
         draw_rounded_rect(
             frame,
             width,
@@ -1638,7 +1668,7 @@ fn draw_chrome(
             status_rect.y,
             status_rect.width,
             status_rect.height,
-            12,
+            status_corner,
             if is_loading {
                 Color::rgb(228, 235, 245)
             } else {
@@ -1649,8 +1679,8 @@ fn draw_chrome(
             frame,
             width,
             height,
-            status_rect.x + 10,
-            status_rect.y + 8,
+            status_rect.x + scale_i32(10, scale),
+            status_rect.y + scale_i32(8, scale),
             &rendered_message,
             if is_loading {
                 Color::rgb(68, 89, 132)
@@ -1658,7 +1688,7 @@ fn draw_chrome(
                 Color::rgb(104, 101, 95)
             },
             FontWeight::Normal,
-            12.0,
+            12.0 * scale as f32,
         );
     }
 
@@ -1667,9 +1697,9 @@ fn draw_chrome(
         width,
         height,
         0,
-        CHROME_HEIGHT as i32 - 1,
+        chrome_height as i32 - toolbar_divider,
         width as i32,
-        1,
+        toolbar_divider,
         toolbar_border,
     );
 }
@@ -1810,6 +1840,14 @@ fn point_in_rounded_rect(
     } else {
         true
     }
+}
+
+fn scale_u32(value: u32, scale: f64) -> u32 {
+    ((value as f64) * scale).round().max(1.0) as u32
+}
+
+fn scale_i32(value: u32, scale: f64) -> i32 {
+    scale_u32(value, scale) as i32
 }
 
 fn draw_text_bitmap(
@@ -2025,13 +2063,14 @@ fn build_address_text_layout(
     address_input: &str,
     preedit_text: &str,
     viewport_width: u32,
+    scale: f64,
 ) -> AddressTextLayout {
-    let rect = address_bar_rect(viewport_width);
-    let text_x = rect.x + 14;
-    let text_y = rect.y + 8;
+    let rect = address_bar_rect(viewport_width, scale);
+    let text_x = rect.x + scale_i32(14, scale);
+    let text_y = rect.y + scale_i32(8, scale);
     let prefix = "";
     let display_text = format!("{prefix}{address_input}{preedit_text}");
-    let font_size = 16usize;
+    let font_size = scale_u32(16, scale) as usize;
     let glyphs = text_rasterizer
         .layout_text_glyphs(&display_text, FontWeight::Normal, font_size, text_x, text_y)
         .map(|mut glyphs| {
@@ -2103,8 +2142,8 @@ impl AddressTextLayout {
     }
 }
 
-fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
-    let rect = address_bar_rect(viewport_width);
+fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32, scale: f64) -> bool {
+    let rect = address_bar_rect(viewport_width, scale);
     let min_x = rect.x as f64;
     let max_x = (rect.x + rect.width) as f64;
     let min_y = rect.y as f64;
@@ -2127,67 +2166,86 @@ struct ButtonRect {
     height: i32,
 }
 
-fn nav_button_rect(action: NavAction) -> ButtonRect {
+fn nav_button_rect(action: NavAction, scale: f64) -> ButtonRect {
     let index = match action {
         NavAction::Back => 0,
         NavAction::Forward => 1,
         NavAction::Reload => 2,
     };
     ButtonRect {
-        x: (NAV_BUTTON_MARGIN_LEFT + index * (NAV_BUTTON_SIZE + NAV_BUTTON_SPACING)) as i32,
-        y: nav_row_y() as i32 + 7,
-        width: NAV_BUTTON_SIZE as i32,
-        height: NAV_BUTTON_SIZE as i32,
+        x: scale_i32(
+            NAV_BUTTON_MARGIN_LEFT + index * (NAV_BUTTON_SIZE + NAV_BUTTON_SPACING),
+            scale,
+        ),
+        y: nav_row_y(scale) as i32 + scale_i32(7, scale),
+        width: scale_i32(NAV_BUTTON_SIZE, scale),
+        height: scale_i32(NAV_BUTTON_SIZE, scale),
     }
 }
 
-fn nav_row_y() -> u32 {
-    TAB_BAR_HEIGHT
+fn nav_row_y(scale: f64) -> u32 {
+    scale_u32(TAB_BAR_HEIGHT, scale)
 }
 
-fn address_bar_rect(viewport_width: u32) -> ButtonRect {
-    let right_padding = ADDRESS_BAR_PADDING + STATUS_PILL_WIDTH + STATUS_PILL_GAP;
+fn address_bar_rect(viewport_width: u32, scale: f64) -> ButtonRect {
+    let right_padding = scale_u32(
+        ADDRESS_BAR_PADDING + STATUS_PILL_WIDTH + STATUS_PILL_GAP,
+        scale,
+    );
     ButtonRect {
-        x: ADDRESS_BAR_LEFT_OFFSET as i32,
-        y: nav_row_y() as i32 + 5,
+        x: scale_i32(ADDRESS_BAR_LEFT_OFFSET, scale),
+        y: nav_row_y(scale) as i32 + scale_i32(5, scale),
         width: viewport_width
-            .saturating_sub(ADDRESS_BAR_LEFT_OFFSET + right_padding)
-            .max(180) as i32,
-        height: ADDRESS_BAR_HEIGHT as i32,
+            .saturating_sub(scale_u32(ADDRESS_BAR_LEFT_OFFSET, scale) + right_padding)
+            .max(scale_u32(180, scale)) as i32,
+        height: scale_i32(ADDRESS_BAR_HEIGHT, scale),
     }
 }
 
-fn status_chip_rect(viewport_width: u32) -> ButtonRect {
+fn status_chip_rect(viewport_width: u32, scale: f64) -> ButtonRect {
     ButtonRect {
-        x: viewport_width.saturating_sub(ADDRESS_BAR_PADDING + STATUS_PILL_WIDTH) as i32,
-        y: nav_row_y() as i32 + 8,
-        width: STATUS_PILL_WIDTH as i32,
-        height: 28,
+        x: viewport_width.saturating_sub(scale_u32(ADDRESS_BAR_PADDING + STATUS_PILL_WIDTH, scale))
+            as i32,
+        y: nav_row_y(scale) as i32 + scale_i32(8, scale),
+        width: scale_i32(STATUS_PILL_WIDTH, scale),
+        height: scale_i32(28, scale),
     }
 }
 
-fn tab_rect(index: usize, viewport_width: u32, tab_count: usize) -> Option<ButtonRect> {
+fn tab_rect(index: usize, viewport_width: u32, tab_count: usize, scale: f64) -> Option<ButtonRect> {
     if tab_count == 0 {
         return None;
     }
     let available_width = viewport_width
-        .saturating_sub(NEW_TAB_BUTTON_SIZE + ADDRESS_BAR_PADDING * 3)
-        .max(TAB_MIN_WIDTH);
-    let total_gaps = TAB_GAP.saturating_mul(tab_count.saturating_sub(1) as u32);
-    let width_per_tab = ((available_width.saturating_sub(total_gaps)) / tab_count as u32)
-        .clamp(TAB_MIN_WIDTH, TAB_MAX_WIDTH);
-    let x = ADDRESS_BAR_PADDING + index as u32 * (width_per_tab + TAB_GAP);
+        .saturating_sub(scale_u32(
+            NEW_TAB_BUTTON_SIZE + ADDRESS_BAR_PADDING * 3,
+            scale,
+        ))
+        .max(scale_u32(TAB_MIN_WIDTH, scale));
+    let total_gaps = scale_u32(TAB_GAP, scale).saturating_mul(tab_count.saturating_sub(1) as u32);
+    let width_per_tab = ((available_width.saturating_sub(total_gaps)) / tab_count as u32).clamp(
+        scale_u32(TAB_MIN_WIDTH, scale),
+        scale_u32(TAB_MAX_WIDTH, scale),
+    );
+    let x = scale_u32(ADDRESS_BAR_PADDING, scale)
+        + index as u32 * (width_per_tab + scale_u32(TAB_GAP, scale));
     Some(ButtonRect {
         x: x as i32,
-        y: 6,
+        y: scale_i32(6, scale),
         width: width_per_tab as i32,
-        height: TAB_HEIGHT as i32,
+        height: scale_i32(TAB_HEIGHT, scale),
     })
 }
 
-fn tab_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> Option<usize> {
+fn tab_hit_test(
+    x: f64,
+    y: f64,
+    viewport_width: u32,
+    tab_count: usize,
+    scale: f64,
+) -> Option<usize> {
     for index in 0..tab_count {
-        if let Some(rect) = tab_rect(index, viewport_width, tab_count) {
+        if let Some(rect) = tab_rect(index, viewport_width, tab_count, scale) {
             if x >= rect.x as f64
                 && x <= (rect.x + rect.width) as f64
                 && y >= rect.y as f64
@@ -2200,24 +2258,30 @@ fn tab_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> Option
     None
 }
 
-fn tab_close_rect(index: usize, viewport_width: u32, tab_count: usize) -> ButtonRect {
-    let rect = tab_rect(index, viewport_width, tab_count).unwrap_or(ButtonRect {
+fn tab_close_rect(index: usize, viewport_width: u32, tab_count: usize, scale: f64) -> ButtonRect {
+    let rect = tab_rect(index, viewport_width, tab_count, scale).unwrap_or(ButtonRect {
         x: 0,
         y: 0,
         width: 0,
         height: 0,
     });
     ButtonRect {
-        x: rect.x + rect.width - 20,
-        y: rect.y + 4,
-        width: 14,
-        height: 14,
+        x: rect.x + rect.width - scale_i32(20, scale),
+        y: rect.y + scale_i32(4, scale),
+        width: scale_i32(14, scale),
+        height: scale_i32(14, scale),
     }
 }
 
-fn tab_close_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> Option<usize> {
+fn tab_close_hit_test(
+    x: f64,
+    y: f64,
+    viewport_width: u32,
+    tab_count: usize,
+    scale: f64,
+) -> Option<usize> {
     for index in 0..tab_count {
-        let rect = tab_close_rect(index, viewport_width, tab_count);
+        let rect = tab_close_rect(index, viewport_width, tab_count, scale);
         if x >= rect.x as f64
             && x <= (rect.x + rect.width) as f64
             && y >= rect.y as f64
@@ -2229,26 +2293,28 @@ fn tab_close_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> 
     None
 }
 
-fn new_tab_button_rect(viewport_width: u32) -> ButtonRect {
+fn new_tab_button_rect(viewport_width: u32, scale: f64) -> ButtonRect {
     ButtonRect {
-        x: viewport_width.saturating_sub(ADDRESS_BAR_PADDING + NEW_TAB_BUTTON_SIZE) as i32,
-        y: 7,
-        width: NEW_TAB_BUTTON_SIZE as i32,
-        height: NEW_TAB_BUTTON_SIZE as i32,
+        x: viewport_width
+            .saturating_sub(scale_u32(ADDRESS_BAR_PADDING + NEW_TAB_BUTTON_SIZE, scale))
+            as i32,
+        y: scale_i32(7, scale),
+        width: scale_i32(NEW_TAB_BUTTON_SIZE, scale),
+        height: scale_i32(NEW_TAB_BUTTON_SIZE, scale),
     }
 }
 
-fn new_tab_button_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
-    let rect = new_tab_button_rect(viewport_width);
+fn new_tab_button_hit_test(x: f64, y: f64, viewport_width: u32, scale: f64) -> bool {
+    let rect = new_tab_button_rect(viewport_width, scale);
     x >= rect.x as f64
         && x <= (rect.x + rect.width) as f64
         && y >= rect.y as f64
         && y <= (rect.y + rect.height) as f64
 }
 
-fn nav_button_hit_test(x: f64, y: f64) -> Option<NavAction> {
+fn nav_button_hit_test(x: f64, y: f64, scale: f64) -> Option<NavAction> {
     for action in [NavAction::Back, NavAction::Forward, NavAction::Reload] {
-        let rect = nav_button_rect(action);
+        let rect = nav_button_rect(action, scale);
         if x >= rect.x as f64
             && x <= (rect.x + rect.width) as f64
             && y >= rect.y as f64
@@ -2265,8 +2331,9 @@ fn address_bar_cursor_from_position(
     text: &str,
     x: f64,
     viewport_width: u32,
+    scale: f64,
 ) -> usize {
-    let layout = build_address_text_layout(text_rasterizer, text, "", viewport_width);
+    let layout = build_address_text_layout(text_rasterizer, text, "", viewport_width, scale);
     layout.char_index_from_x(text_rasterizer, x)
 }
 
@@ -2343,36 +2410,42 @@ mod tests {
 
     #[test]
     fn detects_address_bar_hits() {
-        assert!(address_bar_hit_test(140.0, 50.0, 900));
-        assert!(!address_bar_hit_test(30.0, 90.0, 900));
+        assert!(address_bar_hit_test(140.0, 50.0, 900, 1.0));
+        assert!(!address_bar_hit_test(30.0, 90.0, 900, 1.0));
     }
 
     #[test]
     fn detects_nav_button_hits() {
-        assert_eq!(nav_button_hit_test(18.0, 50.0), Some(NavAction::Back));
-        assert_eq!(nav_button_hit_test(58.0, 50.0), Some(NavAction::Forward));
-        assert_eq!(nav_button_hit_test(98.0, 50.0), Some(NavAction::Reload));
-        assert_eq!(nav_button_hit_test(200.0, 50.0), None);
+        assert_eq!(nav_button_hit_test(18.0, 50.0, 1.0), Some(NavAction::Back));
+        assert_eq!(
+            nav_button_hit_test(58.0, 50.0, 1.0),
+            Some(NavAction::Forward)
+        );
+        assert_eq!(
+            nav_button_hit_test(98.0, 50.0, 1.0),
+            Some(NavAction::Reload)
+        );
+        assert_eq!(nav_button_hit_test(200.0, 50.0, 1.0), None);
     }
 
     #[test]
     fn detects_tab_hits() {
-        assert_eq!(tab_hit_test(24.0, 12.0, 900, 2), Some(0));
-        assert_eq!(tab_hit_test(260.0, 12.0, 900, 2), Some(1));
-        assert_eq!(tab_hit_test(700.0, 12.0, 900, 2), None);
+        assert_eq!(tab_hit_test(24.0, 12.0, 900, 2, 1.0), Some(0));
+        assert_eq!(tab_hit_test(260.0, 12.0, 900, 2, 1.0), Some(1));
+        assert_eq!(tab_hit_test(700.0, 12.0, 900, 2, 1.0), None);
     }
 
     #[test]
     fn detects_new_tab_button_hits() {
-        assert!(new_tab_button_hit_test(870.0, 18.0, 900));
-        assert!(!new_tab_button_hit_test(820.0, 18.0, 900));
+        assert!(new_tab_button_hit_test(870.0, 18.0, 900, 1.0));
+        assert!(!new_tab_button_hit_test(820.0, 18.0, 900, 1.0));
     }
 
     #[test]
     fn detects_tab_close_hits() {
-        assert_eq!(tab_close_hit_test(216.0, 14.0, 900, 2), Some(0));
-        assert_eq!(tab_close_hit_test(446.0, 14.0, 900, 2), Some(1));
-        assert_eq!(tab_close_hit_test(700.0, 14.0, 900, 2), None);
+        assert_eq!(tab_close_hit_test(216.0, 14.0, 900, 2, 1.0), Some(0));
+        assert_eq!(tab_close_hit_test(446.0, 14.0, 900, 2, 1.0), Some(1));
+        assert_eq!(tab_close_hit_test(700.0, 14.0, 900, 2, 1.0), None);
     }
 
     #[test]
@@ -2440,10 +2513,16 @@ mod tests {
         let text_rasterizer = TextRasterizer::load();
         let text = "hello";
         let viewport_width = 900;
-        let start_x = (super::address_bar_rect(viewport_width).x + 14) as f64;
+        let start_x = (super::address_bar_rect(viewport_width, 1.0).x + 14) as f64;
 
         assert_eq!(
-            address_bar_cursor_from_position(&text_rasterizer, text, start_x + 2.0, viewport_width),
+            address_bar_cursor_from_position(
+                &text_rasterizer,
+                text,
+                start_x + 2.0,
+                viewport_width,
+                1.0
+            ),
             0
         );
         assert_eq!(
@@ -2451,7 +2530,8 @@ mod tests {
                 &text_rasterizer,
                 text,
                 start_x + 80.0,
-                viewport_width
+                viewport_width,
+                1.0
             ),
             5
         );
@@ -2460,7 +2540,7 @@ mod tests {
     #[test]
     fn address_layout_keeps_first_glyph_inside_padding() {
         let text_rasterizer = TextRasterizer::load();
-        let layout = build_address_text_layout(&text_rasterizer, "example.com", "", 900);
+        let layout = build_address_text_layout(&text_rasterizer, "example.com", "", 900, 1.0);
         if let Some(glyphs) = layout.glyphs.as_ref() {
             let min_x = glyphs
                 .iter()
