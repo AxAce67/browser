@@ -129,12 +129,9 @@ fn paint_box(
         .max()
         .unwrap_or(0);
     let text_width = widest_line.max(u32::from(!layout.lines.is_empty()));
-    let text_height = layout
-        .lines
-        .iter()
-        .map(|line| line.height)
-        .sum::<u32>();
-    let is_blockquote = matches!(&layout.kind, LayoutKind::Block { tag_name } if tag_name == "blockquote");
+    let text_height = layout.lines.iter().map(|line| line.height).sum::<u32>();
+    let is_blockquote =
+        matches!(&layout.kind, LayoutKind::Block { tag_name } if tag_name == "blockquote");
     let is_hr = matches!(&layout.kind, LayoutKind::Block { tag_name } if tag_name == "hr");
 
     if !layout.lines.is_empty() || !layout.children.is_empty() || is_hr {
@@ -238,7 +235,14 @@ fn paint_box(
     }
 
     for child in &layout.children {
-        paint_box(child, content_x, cursor_y, max_width, commands, link_regions);
+        paint_box(
+            child,
+            content_x,
+            cursor_y,
+            max_width,
+            commands,
+            link_regions,
+        );
     }
 
     if !layout.lines.is_empty() || !layout.children.is_empty() || is_hr {
@@ -257,11 +261,9 @@ fn paint_box(
 fn line_height_for_font(font_size: usize, line_height: LineHeight) -> u32 {
     match line_height {
         LineHeight::Normal => ((font_size as f32) * 1.35).round().max(LINE_HEIGHT as f32) as u32,
-        LineHeight::RelativePercent(percent) => {
-            ((font_size as f32) * (percent as f32 / 100.0))
-                .round()
-                .max(LINE_HEIGHT as f32) as u32
-        }
+        LineHeight::RelativePercent(percent) => ((font_size as f32) * (percent as f32 / 100.0))
+            .round()
+            .max(LINE_HEIGHT as f32) as u32,
         LineHeight::Px(px) => px.max(LINE_HEIGHT as usize) as u32,
     }
 }
@@ -291,9 +293,10 @@ mod tests {
 
         assert!(display_list.width >= 160);
         assert!(display_list.height >= 80);
-        assert!(display_list.commands.iter().any(|command| {
-            matches!(command, DisplayCommand::FillRect { .. })
-        }));
+        assert!(display_list
+            .commands
+            .iter()
+            .any(|command| { matches!(command, DisplayCommand::FillRect { .. }) }));
         assert!(display_list.commands.iter().any(|command| {
             matches!(command, DisplayCommand::DrawText { text, .. } if text == "hello world")
         }));

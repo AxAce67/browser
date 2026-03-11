@@ -7,6 +7,7 @@ mod paint;
 mod renderer;
 mod source;
 mod style;
+mod webview;
 
 fn main() {
     let config = match parse_args() {
@@ -18,18 +19,29 @@ fn main() {
         }
     };
 
-    if config.gui {
-        let requested_source = config
-            .source
-            .unwrap_or_else(|| source::DEFAULT_SOURCE.to_string());
-        if let Err(message) = gui::run(&requested_source) {
-            eprintln!("{message}");
-            std::process::exit(1);
+    let requested_source = config
+        .source
+        .unwrap_or_else(|| source::DEFAULT_SOURCE.to_string());
+
+    match config.mode {
+        RunMode::ToyGui => {
+            if let Err(message) = gui::run(&requested_source) {
+                eprintln!("{message}");
+                std::process::exit(1);
+            }
+            return;
         }
-        return;
+        RunMode::WebView => {
+            if let Err(message) = webview::run(&requested_source) {
+                eprintln!("{message}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        RunMode::Terminal => {}
     }
 
-    let (html_input, source_path) = match source::load_html(config.source.as_deref()) {
+    let (html_input, source_path) = match source::load_html(Some(&requested_source)) {
         Ok(value) => value,
         Err(message) => {
             eprintln!("{message}");
@@ -49,17 +61,25 @@ fn main() {
 }
 
 struct RunConfig {
-    gui: bool,
+    mode: RunMode,
     source: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunMode {
+    Terminal,
+    ToyGui,
+    WebView,
+}
+
 fn parse_args() -> Result<RunConfig, String> {
-    let mut gui = false;
+    let mut mode = RunMode::Terminal;
     let mut source = None;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
-            "--gui" => gui = true,
+            "--gui" | "--toy" => mode = RunMode::ToyGui,
+            "--webview" => mode = RunMode::WebView,
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -72,9 +92,9 @@ fn parse_args() -> Result<RunConfig, String> {
         }
     }
 
-    Ok(RunConfig { gui, source })
+    Ok(RunConfig { mode, source })
 }
 
 fn print_usage() {
-    eprintln!("Usage: cargo run -- [--gui] [source]");
+    eprintln!("Usage: cargo run -- [--gui|--toy|--webview] [source]");
 }

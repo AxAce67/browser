@@ -10,8 +10,7 @@ pub const DEFAULT_SOURCE: &str = "examples/welcome.html";
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 const MAX_REDIRECTS: usize = 10;
 const BROWSER_USER_AGENT: &str = "ToyBrowser/0.1 (+https://github.com/AxAce67/browser)";
-const ACCEPT_HEADER: &str =
-    "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5";
+const ACCEPT_HEADER: &str = "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceOrigin {
@@ -71,6 +70,39 @@ pub fn resolve_reference(current_source: &str, target: &str) -> String {
         .to_string()
 }
 
+pub fn normalize_browser_url(requested: &str) -> Result<String, String> {
+    let trimmed = requested.trim();
+    if trimmed.is_empty() {
+        return Err("address is empty".to_string());
+    }
+
+    if let Ok(url) = Url::parse(trimmed) {
+        return Ok(url.to_string());
+    }
+
+    let candidate_path = Path::new(trimmed);
+    if candidate_path.exists() {
+        let absolute = if candidate_path.is_absolute() {
+            candidate_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|err| format!("failed to resolve current directory: {err}"))?
+                .join(candidate_path)
+        };
+        return Url::from_file_path(&absolute)
+            .map(|url| url.to_string())
+            .map_err(|_| format!("failed to convert {} into a file URL", absolute.display()));
+    }
+
+    if looks_like_host(trimmed) {
+        return Url::parse(&format!("https://{trimmed}"))
+            .map(|url| url.to_string())
+            .map_err(|err| format!("invalid address {trimmed}: {err}"));
+    }
+
+    Err(format!("unsupported address: {trimmed}"))
+}
+
 fn fetch_remote_html(url: &str) -> Result<(String, PathBuf), String> {
     let client = build_http_client()?;
     let response = client
@@ -118,7 +150,9 @@ fn default_request_headers() -> reqwest::header::HeaderMap {
     headers.insert(ACCEPT, ACCEPT_HEADER.parse().expect("valid accept header"));
     headers.insert(
         ACCEPT_LANGUAGE,
-        "en-US,en;q=0.9".parse().expect("valid accept-language header"),
+        "en-US,en;q=0.9"
+            .parse()
+            .expect("valid accept-language header"),
     );
     headers
 }
@@ -136,11 +170,18 @@ fn supports_text_response(content_type: &str) -> bool {
         || normalized.starts_with("text/plain")
 }
 
+fn looks_like_host(value: &str) -> bool {
+    value.starts_with("localhost")
+        || value.starts_with("127.")
+        || value.starts_with("[::1]")
+        || value.contains('.')
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_source, load_html, resolve_reference, supports_text_response, SourceOrigin,
-        DEFAULT_SOURCE,
+        classify_source, load_html, normalize_browser_url, resolve_reference,
+        supports_text_response, SourceOrigin, DEFAULT_SOURCE,
     };
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -267,5 +308,24 @@ mod tests {
             resolve_reference("https://example.com/docs/index.html", "../guide"),
             "https://example.com/guide"
         );
+    }
+
+    #[test]
+    fn normalizes_remote_browser_urls() {
+        assert_eq!(
+            normalize_browser_url("example.com").expect("host should normalize"),
+            "https://example.com/"
+        );
+        assert_eq!(
+            normalize_browser_url("https://example.com/docs").expect("url should stay remote"),
+            "https://example.com/docs"
+        );
+    }
+
+    #[test]
+    fn normalizes_local_browser_paths() {
+        let url = normalize_browser_url("examples/welcome.html").expect("fixture should normalize");
+        assert!(url.starts_with("file:///"));
+        assert!(url.ends_with("/examples/welcome.html"));
     }
 }

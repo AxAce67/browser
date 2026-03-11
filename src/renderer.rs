@@ -13,11 +13,7 @@ fn render_box(layout: &LayoutBox, depth: usize, output: &mut String) {
     match &layout.kind {
         LayoutKind::Document => {}
         LayoutKind::Block { tag_name } => {
-            output.push_str(&format!(
-                "{indent}<{}{}>\n",
-                tag_name,
-                style_suffix(layout)
-            ));
+            output.push_str(&format!("{indent}<{}{}>\n", tag_name, style_suffix(layout)));
         }
         LayoutKind::Text => {}
     }

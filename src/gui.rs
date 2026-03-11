@@ -1,14 +1,14 @@
-use arboard::Clipboard;
 use crate::html;
 use crate::layout;
 use crate::layout::TextMeasurer;
 use crate::paint::{Color, DisplayCommand, DisplayList, CHAR_WIDTH};
 use crate::source;
 use crate::style;
+use arboard::Clipboard;
 use font8x8::UnicodeFonts;
 use fontdb::{Database, Family, Query, Style, Weight};
-use fontdue::{Font, FontSettings};
 use fontdue::layout::{CoordinateSystem, GlyphPosition, Layout, LayoutSettings, TextStyle};
+use fontdue::{Font, FontSettings};
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -95,9 +95,7 @@ impl GuiApp {
             address_selection_anchor: None,
             address_drag_active: false,
             preedit_text: String::new(),
-            status_message: Some(
-                "Click or Cmd/Ctrl+L to edit address, Enter to load".to_string(),
-            ),
+            status_message: Some("Click or Cmd/Ctrl+L to edit address, Enter to load".to_string()),
             window: None,
             pixels: None,
             viewport_width,
@@ -197,7 +195,10 @@ impl GuiApp {
         if anchor == self.address_cursor {
             None
         } else {
-            Some((anchor.min(self.address_cursor), anchor.max(self.address_cursor)))
+            Some((
+                anchor.min(self.address_cursor),
+                anchor.max(self.address_cursor),
+            ))
         }
     }
 
@@ -610,13 +611,27 @@ impl TextRasterizer {
             return false;
         };
 
-        draw_positioned_glyphs(frame, width, height, glyphs, color, font, clip_top, clip_bottom);
+        draw_positioned_glyphs(
+            frame,
+            width,
+            height,
+            glyphs,
+            color,
+            font,
+            clip_top,
+            clip_bottom,
+        );
         true
     }
 }
 
 impl TextMeasurer for TextRasterizer {
-    fn measure_text(&self, text: &str, font_size: usize, font_weight: crate::style::FontWeight) -> usize {
+    fn measure_text(
+        &self,
+        text: &str,
+        font_size: usize,
+        font_weight: crate::style::FontWeight,
+    ) -> usize {
         self.measure_text_width(text, font_weight, font_size)
     }
 }
@@ -723,7 +738,8 @@ impl ApplicationHandler for GuiApp {
                         event_loop.exit();
                         return;
                     }
-                    if let Err(err) = pixels.resize_buffer(self.viewport_width, self.viewport_height)
+                    if let Err(err) =
+                        pixels.resize_buffer(self.viewport_width, self.viewport_height)
                     {
                         eprintln!("failed to resize buffer: {err}");
                         event_loop.exit();
@@ -1434,20 +1450,13 @@ fn draw_glyph_bitmap(
             }
 
             let py = y + row as i32;
-            if clip_top.is_some_and(|top| py < top) || clip_bottom.is_some_and(|bottom| py >= bottom)
+            if clip_top.is_some_and(|top| py < top)
+                || clip_bottom.is_some_and(|bottom| py >= bottom)
             {
                 continue;
             }
 
-            blend_pixel(
-                frame,
-                width,
-                height,
-                x + col as i32,
-                py,
-                color,
-                coverage,
-            );
+            blend_pixel(frame, width, height, x + col as i32, py, color, coverage);
         }
     }
 }
@@ -1585,26 +1594,28 @@ fn build_address_text_layout(
     let prefix = if address_focus { "> " } else { "" };
     let display_text = format!("{prefix}{address_input}{preedit_text}");
     let font_size = 17usize.saturating_mul(scale as usize);
-    let glyphs = text_rasterizer.layout_text_glyphs(
-        &display_text,
-        crate::style::FontWeight::Normal,
-        font_size,
-        text_x,
-        text_y,
-    ).map(|mut glyphs| {
-        if let Some(min_x) = glyphs
-            .iter()
-            .map(|glyph| glyph.x.floor() as i32)
-            .min()
-            .filter(|min_x| *min_x < text_x)
-        {
-            let shift = (text_x - min_x) as f32;
-            for glyph in &mut glyphs {
-                glyph.x += shift;
+    let glyphs = text_rasterizer
+        .layout_text_glyphs(
+            &display_text,
+            crate::style::FontWeight::Normal,
+            font_size,
+            text_x,
+            text_y,
+        )
+        .map(|mut glyphs| {
+            if let Some(min_x) = glyphs
+                .iter()
+                .map(|glyph| glyph.x.floor() as i32)
+                .min()
+                .filter(|min_x| *min_x < text_x)
+            {
+                let shift = (text_x - min_x) as f32;
+                for glyph in &mut glyphs {
+                    glyph.x += shift;
+                }
             }
-        }
-        glyphs
-    });
+            glyphs
+        });
 
     AddressTextLayout {
         display_text,
@@ -1644,15 +1655,15 @@ impl AddressTextLayout {
     }
 
     fn x_for_char_index(&self, text_rasterizer: &TextRasterizer, char_index: usize) -> i32 {
-        let address_only = &self.display_text[self.prefix_len_bytes
-            ..self.prefix_len_bytes + self.address_input_len_bytes];
+        let address_only = &self.display_text
+            [self.prefix_len_bytes..self.prefix_len_bytes + self.address_input_len_bytes];
         let byte_offset = self.address_byte_offset_for_char_index(address_only, char_index);
         self.x_for_byte_offset(text_rasterizer, byte_offset)
     }
 
     fn char_index_from_x(&self, text_rasterizer: &TextRasterizer, x: f64) -> usize {
-        let address_only = &self.display_text[self.prefix_len_bytes
-            ..self.prefix_len_bytes + self.address_input_len_bytes];
+        let address_only = &self.display_text
+            [self.prefix_len_bytes..self.prefix_len_bytes + self.address_input_len_bytes];
         let char_count = address_only.chars().count();
 
         for index in 0..char_count {
@@ -1755,10 +1766,10 @@ fn apply_scroll_delta(
 #[cfg(test)]
 mod tests {
     use super::{
-        address_bar_cursor_from_position, address_bar_hit_test, address_slice,
-        apply_scroll_delta, chrome_height, clamp_scroll,
-        build_address_text_layout, content_scale_for_viewport, link_hit_test, load_page,
-        rasterize, sanitize_clipboard_text, top_margin, GuiApp, TextRasterizer,
+        address_bar_cursor_from_position, address_bar_hit_test, address_slice, apply_scroll_delta,
+        build_address_text_layout, chrome_height, clamp_scroll, content_scale_for_viewport,
+        link_hit_test, load_page, rasterize, sanitize_clipboard_text, top_margin, GuiApp,
+        TextRasterizer,
     };
     use crate::paint::{Color, DisplayCommand, DisplayList, LinkRegion};
 
@@ -1831,7 +1842,15 @@ mod tests {
         };
 
         let mut frame = vec![255_u8; (240 * 280 * 4) as usize];
-        rasterize(&text_rasterizer, &display_list, &mut frame, 240, 280, 35, scale);
+        rasterize(
+            &text_rasterizer,
+            &display_list,
+            &mut frame,
+            240,
+            280,
+            35,
+            scale,
+        );
 
         let pixel_y = chrome_height(scale) + top_margin(scale) + ((40 - 35) as u32 * scale) + 4;
         let pixel_index = ((pixel_y * 240 + 72) * 4) as usize;
@@ -1859,7 +1878,15 @@ mod tests {
         };
 
         let mut frame = vec![255_u8; (220 * 220 * 4) as usize];
-        rasterize(&text_rasterizer, &display_list, &mut frame, 220, 220, 25, scale);
+        rasterize(
+            &text_rasterizer,
+            &display_list,
+            &mut frame,
+            220,
+            220,
+            25,
+            scale,
+        );
 
         let chrome_pixel_index = (((chrome_height(scale) - 4) * 220 + 48) * 4) as usize;
         assert_eq!(frame[chrome_pixel_index], 255);

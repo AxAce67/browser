@@ -281,7 +281,11 @@ mod tests {
     fn preserves_inline_boundary_spaces() {
         let document = parse(r#"<p>Hello <a href="/x">world</a> again</p>"#);
         let paragraph = &document.children[0];
-        assert!(matches!(paragraph.children[0].node_type, NodeType::Text(ref text) if text == "Hello "));
-        assert!(matches!(paragraph.children[2].node_type, NodeType::Text(ref text) if text == " again"));
+        assert!(
+            matches!(paragraph.children[0].node_type, NodeType::Text(ref text) if text == "Hello ")
+        );
+        assert!(
+            matches!(paragraph.children[2].node_type, NodeType::Text(ref text) if text == " again")
+        );
     }
 }

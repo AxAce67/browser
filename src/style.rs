@@ -162,21 +162,8 @@ fn default_style(node: &Node) -> ComputedStyle {
     match &node.node_type {
         NodeType::Element(element) => {
             style.display = match element.tag_name.as_str() {
-                "span"
-                | "a"
-                | "br"
-                | "strong"
-                | "b"
-                | "em"
-                | "i"
-                | "small"
-                | "code"
-                | "label"
-                | "cite"
-                | "q"
-                | "abbr"
-                | "sub"
-                | "sup" => Display::Inline,
+                "span" | "a" | "br" | "strong" | "b" | "em" | "i" | "small" | "code" | "label"
+                | "cite" | "q" | "abbr" | "sub" | "sup" => Display::Inline,
                 "style" | "head" | "script" | "meta" | "link" | "title" | "noscript" => {
                     Display::None
                 }
@@ -417,12 +404,17 @@ fn parse_line_height(value: &str) -> Option<LineHeight> {
     if normalized == "normal" {
         return Some(LineHeight::Normal);
     }
-    if let Some(px) = normalized.strip_suffix("px").and_then(|raw| raw.parse::<usize>().ok()) {
+    if let Some(px) = normalized
+        .strip_suffix("px")
+        .and_then(|raw| raw.parse::<usize>().ok())
+    {
         return Some(LineHeight::Px(px));
     }
     if let Ok(multiplier) = normalized.parse::<f32>() {
         if multiplier.is_finite() && multiplier > 0.0 {
-            return Some(LineHeight::RelativePercent((multiplier * 100.0).round() as usize));
+            return Some(LineHeight::RelativePercent(
+                (multiplier * 100.0).round() as usize
+            ));
         }
     }
     None
@@ -519,7 +511,10 @@ mod tests {
         assert_eq!(paragraph.style.background_color.as_deref(), Some("yellow"));
         assert_eq!(paragraph.style.width, Some(12));
         assert_eq!(paragraph.style.font_size, 20);
-        assert_eq!(paragraph.style.line_height, LineHeight::RelativePercent(170));
+        assert_eq!(
+            paragraph.style.line_height,
+            LineHeight::RelativePercent(170)
+        );
         assert_eq!(
             paragraph.style.margin,
             EdgeSizes {

@@ -143,11 +143,7 @@ pub fn build_with_measurer(
                 }
 
                 if !inline_fragments.is_empty() {
-                    lines.extend(wrap_fragments(
-                        &inline_fragments,
-                        available_width,
-                        measurer,
-                    ));
+                    lines.extend(wrap_fragments(&inline_fragments, available_width, measurer));
                     inline_fragments.clear();
                 }
 
@@ -155,11 +151,7 @@ pub fn build_with_measurer(
             }
 
             if !inline_fragments.is_empty() {
-                lines.extend(wrap_fragments(
-                    &inline_fragments,
-                    available_width,
-                    measurer,
-                ));
+                lines.extend(wrap_fragments(&inline_fragments, available_width, measurer));
             }
 
             LayoutBox {
@@ -396,7 +388,9 @@ fn wrap_fragments(
             }
 
             let pending_width = pending_space.as_ref().map(|space| space.width).unwrap_or(0);
-            if !current_fragments.is_empty() && current_width + pending_width + token.width > width_limit {
+            if !current_fragments.is_empty()
+                && current_width + pending_width + token.width > width_limit
+            {
                 lines.push(LayoutLine {
                     fragments: std::mem::take(&mut current_fragments),
                     width: current_width,
@@ -471,8 +465,12 @@ fn fragment_with_text(template: &LayoutFragment, text: String) -> LayoutFragment
     }
 }
 
-fn with_measured_width(mut fragment: LayoutFragment, measurer: &dyn TextMeasurer) -> LayoutFragment {
-    fragment.width = measurer.measure_text(&fragment.text, fragment.font_size, fragment.font_weight);
+fn with_measured_width(
+    mut fragment: LayoutFragment,
+    measurer: &dyn TextMeasurer,
+) -> LayoutFragment {
+    fragment.width =
+        measurer.measure_text(&fragment.text, fragment.font_size, fragment.font_weight);
     fragment
 }
 
@@ -487,7 +485,9 @@ fn break_fragment(
 
     for ch in fragment.text.chars() {
         let piece = ch.to_string();
-        let glyph_width = measurer.measure_text(&piece, fragment.font_size, fragment.font_weight).max(1);
+        let glyph_width = measurer
+            .measure_text(&piece, fragment.font_size, fragment.font_weight)
+            .max(1);
 
         if current_width + glyph_width > max_width && !current.is_empty() {
             pieces.push(LayoutFragment {
@@ -622,19 +622,22 @@ mod tests {
 
     #[test]
     fn keeps_inline_links_in_same_paragraph() {
-        let document = crate::html::parse(r#"<p>Hello <a href="https://example.com">world</a></p>"#);
+        let document =
+            crate::html::parse(r#"<p>Hello <a href="https://example.com">world</a></p>"#);
         let stylesheet = style::collect_stylesheets(&document);
         let styled = style::style_tree(&document, &stylesheet);
         let layout = build_with_measurer(&styled, 240, &MonospaceTextMeasurer);
         assert_eq!(layout.children[0].lines.len(), 1);
         assert_eq!(layout.children[0].lines[0].fragments.len(), 2);
-        assert_eq!(layout.children[0].lines[0].fragments[1].href.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            layout.children[0].lines[0].fragments[1].href.as_deref(),
+            Some("https://example.com")
+        );
     }
 
     #[test]
     fn keeps_inline_strong_text_in_same_paragraph_flow() {
-        let document =
-            crate::html::parse(r#"<p>We <strong>keep bold text</strong> inline.</p>"#);
+        let document = crate::html::parse(r#"<p>We <strong>keep bold text</strong> inline.</p>"#);
         let stylesheet = style::collect_stylesheets(&document);
         let styled = style::style_tree(&document, &stylesheet);
         let layout = build_with_measurer(&styled, 240, &MonospaceTextMeasurer);
@@ -642,8 +645,14 @@ mod tests {
         assert_eq!(layout.children[0].children.len(), 0);
         assert_eq!(layout.children[0].lines.len(), 1);
         assert_eq!(layout.children[0].lines[0].fragments.len(), 3);
-        assert_eq!(layout.children[0].lines[0].fragments[1].font_weight, FontWeight::Bold);
-        assert_eq!(layout.children[0].lines[0].fragments[1].text, "keep bold text");
+        assert_eq!(
+            layout.children[0].lines[0].fragments[1].font_weight,
+            FontWeight::Bold
+        );
+        assert_eq!(
+            layout.children[0].lines[0].fragments[1].text,
+            "keep bold text"
+        );
     }
 
     #[test]
