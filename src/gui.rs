@@ -11,6 +11,7 @@ use fontdue::{Font, FontSettings};
 use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
@@ -18,7 +19,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-const CHROME_HEIGHT: u32 = 60;
+const CHROME_HEIGHT: u32 = 72;
 const TOP_MARGIN: u32 = 12;
 const SIDE_MARGIN: u32 = 32;
 const SCROLLBAR_WIDTH: u32 = 10;
@@ -26,6 +27,7 @@ const ADDRESS_BAR_HEIGHT: u32 = 32;
 const ADDRESS_BAR_PADDING: u32 = 12;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 960;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 720;
+const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
 
 pub fn run(initial_source: &str) -> Result<(), String> {
     let text_rasterizer = TextRasterizer::load();
@@ -66,6 +68,7 @@ struct GuiApp {
     cursor_position: Option<PhysicalPosition<f64>>,
     text_rasterizer: TextRasterizer,
     clipboard: Option<Clipboard>,
+    address_blink_started_at: Instant,
 }
 
 impl GuiApp {
@@ -96,11 +99,13 @@ impl GuiApp {
             cursor_position: None,
             text_rasterizer,
             clipboard: Clipboard::new().ok(),
+            address_blink_started_at: Instant::now(),
         }
     }
 
     fn draw(&mut self) -> Result<(), String> {
         let address_selection = self.address_selection_range();
+        let caret_visible = self.address_caret_visible();
         let Some(pixels) = self.pixels.as_mut() else {
             return Ok(());
         };
@@ -118,6 +123,7 @@ impl GuiApp {
             self.address_focus,
             self.address_cursor,
             address_selection,
+            caret_visible,
             self.status_message.as_deref(),
         );
         rasterize(
@@ -131,7 +137,13 @@ impl GuiApp {
         );
         pixels
             .render()
-            .map_err(|err| format!("failed to render frame: {err}"))
+            .map_err(|err| format!("failed to render frame: {err}"))?;
+
+        if self.address_focus {
+            self.request_redraw();
+        }
+
+        Ok(())
     }
 
     fn request_redraw(&self) {
@@ -142,6 +154,7 @@ impl GuiApp {
 
     fn set_address_focus(&mut self, focused: bool) {
         self.address_focus = focused;
+        self.reset_address_blink();
         if !focused {
             self.address_selection_anchor = None;
             self.address_drag_active = false;
@@ -150,6 +163,18 @@ impl GuiApp {
         if let Some(window) = self.window.as_ref() {
             window.set_ime_allowed(focused);
         }
+    }
+
+    fn reset_address_blink(&mut self) {
+        self.address_blink_started_at = Instant::now();
+    }
+
+    fn address_caret_visible(&self) -> bool {
+        !self.address_focus
+            || ((self.address_blink_started_at.elapsed().as_millis()
+                / CARET_BLINK_INTERVAL.as_millis())
+                % 2
+                == 0)
     }
 
     fn select_all_address(&mut self) {
@@ -188,6 +213,7 @@ impl GuiApp {
         self.address_input.replace_range(start_byte..end_byte, text);
         self.address_cursor = start + text.chars().count();
         self.clear_address_selection();
+        self.reset_address_blink();
     }
 
     fn insert_address_text(&mut self, text: &str) {
@@ -207,6 +233,7 @@ impl GuiApp {
         let end_byte = address_byte_index(&self.address_input, self.address_cursor);
         self.address_input.replace_range(start_byte..end_byte, "");
         self.address_cursor = start;
+        self.reset_address_blink();
     }
 
     fn delete_address_forward(&mut self) {
@@ -221,6 +248,7 @@ impl GuiApp {
         let start_byte = address_byte_index(&self.address_input, self.address_cursor);
         let end_byte = address_byte_index(&self.address_input, self.address_cursor + 1);
         self.address_input.replace_range(start_byte..end_byte, "");
+        self.reset_address_blink();
     }
 
     fn move_address_cursor(&mut self, next_cursor: usize, extend_selection: bool) {
@@ -236,6 +264,7 @@ impl GuiApp {
         if !extend_selection && self.address_selection_anchor == Some(self.address_cursor) {
             self.clear_address_selection();
         }
+        self.reset_address_blink();
     }
 
     fn copy_address_to_clipboard(&mut self) -> Result<(), String> {
@@ -419,6 +448,7 @@ impl GuiApp {
         if self.address_selection_anchor == Some(self.address_cursor) {
             self.clear_address_selection();
         }
+        self.reset_address_blink();
         self.request_redraw();
     }
 }
@@ -513,6 +543,34 @@ impl TextRasterizer {
         } else {
             text.chars().count() * CHAR_WIDTH as usize
         }
+    }
+
+    fn exact_text_width(
+        &self,
+        text: &str,
+        font_weight: crate::style::FontWeight,
+        font_size: usize,
+    ) -> i32 {
+        let font_size = font_size.max(1) as f32;
+        let Some(font) = self.font_for_weight(font_weight) else {
+            return self.measure_text_width(text, font_weight, font_size as usize) as i32;
+        };
+        let fonts = [font];
+        let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+        layout.reset(&LayoutSettings {
+            x: 0.0,
+            y: 0.0,
+            line_height: 1.0,
+            ..LayoutSettings::default()
+        });
+        layout.append(&fonts, &TextStyle::new(text, font_size, 0));
+
+        layout
+            .glyphs()
+            .iter()
+            .map(|glyph| glyph.x + glyph.width as f32)
+            .fold(0.0, f32::max)
+            .ceil() as i32
     }
 }
 
@@ -877,6 +935,7 @@ fn draw_chrome(
     address_focus: bool,
     address_cursor: usize,
     address_selection: Option<(usize, usize)>,
+    caret_visible: bool,
     status_message: Option<&str>,
 ) {
     draw_rect(
@@ -905,28 +964,28 @@ fn draw_chrome(
     );
 
     let text_x = (address_bar_padding(scale) + 8 * scale) as i32;
-    let text_y = (19 * scale) as i32;
+    let text_y = (20 * scale) as i32;
     let font_size = 17usize.saturating_mul(scale as usize);
     let prefix = if address_focus { "> " } else { "" };
-    let prefix_width = text_rasterizer.measure_text_width(
+    let prefix_width = text_rasterizer.exact_text_width(
         prefix,
         crate::style::FontWeight::Normal,
         font_size,
-    ) as i32;
+    );
 
     if let Some((start, end)) = address_selection {
         let selection_x = text_x
             + prefix_width
-            + text_rasterizer.measure_text_width(
+            + text_rasterizer.exact_text_width(
                 &address_slice(address_input, 0, start),
                 crate::style::FontWeight::Normal,
                 font_size,
-            ) as i32;
-        let selection_width = text_rasterizer.measure_text_width(
+            );
+        let selection_width = text_rasterizer.exact_text_width(
             &address_slice(address_input, start, end),
             crate::style::FontWeight::Normal,
             font_size,
-        ) as i32;
+        );
         draw_rect(
             frame,
             width,
@@ -959,14 +1018,14 @@ fn draw_chrome(
         None,
     );
 
-    if address_focus {
+    if address_focus && caret_visible {
         let caret_x = text_x
             + prefix_width
-            + text_rasterizer.measure_text_width(
+            + text_rasterizer.exact_text_width(
                 &address_slice(address_input, 0, address_cursor),
                 crate::style::FontWeight::Normal,
                 font_size,
-            ) as i32;
+            );
         draw_rect(
             frame,
             width,
@@ -985,7 +1044,7 @@ fn draw_chrome(
             width,
             height,
             (address_bar_padding(scale) + 8 * scale) as i32,
-            (47 * scale) as i32,
+            (52 * scale) as i32,
             message,
             Color::rgb(96, 100, 110),
             crate::style::FontWeight::Normal,
@@ -1445,27 +1504,31 @@ fn address_bar_cursor_from_position(
 ) -> usize {
     let font_size = 17usize.saturating_mul(scale as usize);
     let text_origin = (address_bar_padding(scale) + 8 * scale) as f64;
-    let prefix_width = text_rasterizer.measure_text_width(
+    let prefix_width = text_rasterizer.exact_text_width(
         "> ",
         crate::style::FontWeight::Normal,
         font_size,
     ) as f64;
     let relative_x = (x - text_origin - prefix_width).max(0.0);
-    let mut consumed = 0.0;
+    let char_count = text.chars().count();
 
-    for (index, ch) in text.chars().enumerate() {
-        let glyph_width = text_rasterizer.measure_text_width(
-            &ch.to_string(),
+    for index in 0..char_count {
+        let current_width = text_rasterizer.exact_text_width(
+            &address_slice(text, 0, index),
             crate::style::FontWeight::Normal,
             font_size,
         ) as f64;
-        if relative_x <= consumed + glyph_width / 2.0 {
+        let next_width = text_rasterizer.exact_text_width(
+            &address_slice(text, 0, index + 1),
+            crate::style::FontWeight::Normal,
+            font_size,
+        ) as f64;
+        if relative_x <= current_width + ((next_width - current_width) / 2.0) {
             return index;
         }
-        consumed += glyph_width;
     }
 
-    text.chars().count()
+    char_count
 }
 
 fn link_hit_test(
