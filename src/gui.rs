@@ -17,8 +17,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
-const CHROME_HEIGHT: u32 = 64;
-const TOP_MARGIN: u32 = 20;
+const CHROME_HEIGHT: u32 = 60;
+const TOP_MARGIN: u32 = 12;
 const SIDE_MARGIN: u32 = 32;
 const SCROLLBAR_WIDTH: u32 = 10;
 const ADDRESS_BAR_HEIGHT: u32 = 32;
@@ -248,6 +248,8 @@ impl TextRasterizer {
         color: Color,
         font_weight: crate::style::FontWeight,
         font_size: f32,
+        clip_top: Option<i32>,
+        clip_bottom: Option<i32>,
     ) {
         let font = match font_weight {
             crate::style::FontWeight::Bold => self.bold.as_ref().or(self.regular.as_ref()),
@@ -255,7 +257,19 @@ impl TextRasterizer {
         };
 
         if let Some(font) = font {
-            draw_text_fontdue(frame, width, height, x, y, text, color, font, font_size);
+            draw_text_fontdue(
+                frame,
+                width,
+                height,
+                x,
+                y,
+                text,
+                color,
+                font,
+                font_size,
+                clip_top,
+                clip_bottom,
+            );
         } else {
             let bitmap_scale = if font_size >= 24.0 { 2 } else { 1 };
             draw_text_bitmap(
@@ -268,6 +282,8 @@ impl TextRasterizer {
                 color,
                 font_weight,
                 bitmap_scale,
+                clip_top,
+                clip_bottom,
             );
         }
     }
@@ -653,6 +669,8 @@ fn draw_chrome(
         Color::rgb(32, 35, 40),
         crate::style::FontWeight::Normal,
         17.0 * scale as f32,
+        None,
+        None,
     );
 
     if let Some(message) = status_message {
@@ -666,6 +684,8 @@ fn draw_chrome(
             Color::rgb(96, 100, 110),
             crate::style::FontWeight::Normal,
             13.0 * scale as f32,
+            None,
+            None,
         );
     }
 }
@@ -682,6 +702,8 @@ fn rasterize(
     let content_pixel_width = display_list.width.saturating_mul(scale);
     let origin_x = compute_content_origin_x(width, content_pixel_width) as i32;
     let origin_y = (chrome_height(scale) + top_margin(scale)) as i32;
+    let clip_top = origin_y;
+    let clip_bottom = height.saturating_sub(top_margin(scale)) as i32;
 
     for command in &display_list.commands {
         match command {
@@ -691,37 +713,55 @@ fn rasterize(
                 width: rect_width,
                 height: rect_height,
                 color,
-            } => draw_rect(
-                frame,
-                width,
-                height,
-                origin_x + (*x as i32 * scale as i32),
-                origin_y + ((*y as i32 - scroll_y as i32) * scale as i32),
-                *rect_width as i32 * scale as i32,
-                *rect_height as i32 * scale as i32,
-                *color,
-            ),
+            } => {
+                let draw_y = origin_y + ((*y as i32 - scroll_y as i32) * scale as i32);
+                let draw_height = *rect_height as i32 * scale as i32;
+                if draw_y >= clip_bottom || draw_y + draw_height <= clip_top {
+                    continue;
+                }
+                draw_rect_clipped(
+                    frame,
+                    width,
+                    height,
+                    origin_x + (*x as i32 * scale as i32),
+                    draw_y,
+                    *rect_width as i32 * scale as i32,
+                    draw_height,
+                    *color,
+                    clip_top,
+                    clip_bottom,
+                )
+            }
             DisplayCommand::DrawText {
                 x,
                 y,
                 text,
                 width: _,
-                line_height: _,
+                line_height,
                 color,
                 font_weight,
                 underline: _,
                 font_size,
-            } => text_rasterizer.draw_text(
-                frame,
-                width,
-                height,
-                origin_x + (*x as i32 * scale as i32),
-                origin_y + ((*y as i32 - scroll_y as i32) * scale as i32),
-                text,
-                *color,
-                *font_weight,
-                *font_size as f32 * scale as f32,
-            ),
+            } => {
+                let draw_y = origin_y + ((*y as i32 - scroll_y as i32) * scale as i32);
+                let draw_height = *line_height as i32 * scale as i32;
+                if draw_y >= clip_bottom || draw_y + draw_height <= clip_top {
+                    continue;
+                }
+                text_rasterizer.draw_text(
+                    frame,
+                    width,
+                    height,
+                    origin_x + (*x as i32 * scale as i32),
+                    draw_y,
+                    text,
+                    *color,
+                    *font_weight,
+                    *font_size as f32 * scale as f32,
+                    Some(clip_top),
+                    Some(clip_bottom),
+                )
+            }
         }
         if let DisplayCommand::DrawText {
             x,
@@ -732,7 +772,7 @@ fn rasterize(
             ..
         } = command
         {
-            draw_rect(
+            draw_rect_clipped(
                 frame,
                 width,
                 height,
@@ -744,6 +784,8 @@ fn rasterize(
                 *text_width as i32 * scale as i32,
                 scale.min(2) as i32,
                 Color::rgb(51, 102, 204),
+                clip_top,
+                clip_bottom,
             );
         }
     }
@@ -756,6 +798,36 @@ fn rasterize(
         scroll_y,
         content_viewport_height_for(height, scale),
         scale,
+    );
+}
+
+fn draw_rect_clipped(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    rect_width: i32,
+    rect_height: i32,
+    color: Color,
+    clip_top: i32,
+    clip_bottom: i32,
+) {
+    let clipped_y = y.max(clip_top);
+    let clipped_bottom = (y + rect_height).min(clip_bottom);
+    if clipped_bottom <= clipped_y {
+        return;
+    }
+
+    draw_rect(
+        frame,
+        width,
+        height,
+        x,
+        clipped_y,
+        rect_width,
+        clipped_bottom - clipped_y,
+        color,
     );
 }
 
@@ -793,6 +865,8 @@ fn draw_text_bitmap(
     color: Color,
     font_weight: crate::style::FontWeight,
     scale: u32,
+    clip_top: Option<i32>,
+    clip_bottom: Option<i32>,
 ) {
     let mut cursor_x = x;
     for ch in text.chars() {
@@ -802,6 +876,11 @@ fn draw_text_bitmap(
                     if (bits >> col) & 1 == 1 {
                         let px = cursor_x + col * scale as i32;
                         let py = y + row as i32 * scale as i32;
+                        if clip_top.is_some_and(|top| py + scale as i32 <= top)
+                            || clip_bottom.is_some_and(|bottom| py >= bottom)
+                        {
+                            continue;
+                        }
                         draw_rect(
                             frame,
                             width,
@@ -842,6 +921,8 @@ fn draw_text_fontdue(
     color: Color,
     font: &Font,
     font_size: f32,
+    clip_top: Option<i32>,
+    clip_bottom: Option<i32>,
 ) {
     let fonts = [font];
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
@@ -860,16 +941,24 @@ fn draw_text_fontdue(
 
     for glyph in layout.glyphs() {
         let (metrics, bitmap) = font.rasterize_config(glyph.key);
+        let glyph_y = glyph.y.round() as i32;
+        if clip_top.is_some_and(|top| glyph_y + metrics.height as i32 <= top)
+            || clip_bottom.is_some_and(|bottom| glyph_y >= bottom)
+        {
+            continue;
+        }
         draw_glyph_bitmap(
             frame,
             width,
             height,
             glyph.x.round() as i32,
-            glyph.y.round() as i32,
+            glyph_y,
             metrics.width,
             metrics.height,
             &bitmap,
             color,
+            clip_top,
+            clip_bottom,
         );
     }
 }
@@ -884,6 +973,8 @@ fn draw_glyph_bitmap(
     glyph_height: usize,
     bitmap: &[u8],
     color: Color,
+    clip_top: Option<i32>,
+    clip_bottom: Option<i32>,
 ) {
     for row in 0..glyph_height {
         for col in 0..glyph_width {
@@ -892,12 +983,18 @@ fn draw_glyph_bitmap(
                 continue;
             }
 
+            let py = y + row as i32;
+            if clip_top.is_some_and(|top| py < top) || clip_bottom.is_some_and(|bottom| py >= bottom)
+            {
+                continue;
+            }
+
             blend_pixel(
                 frame,
                 width,
                 height,
                 x + col as i32,
-                y + row as i32,
+                py,
                 color,
                 coverage,
             );
@@ -1169,6 +1266,39 @@ mod tests {
         assert_eq!(frame[pixel_index], 255);
         assert_eq!(frame[pixel_index + 1], 0);
         assert_eq!(frame[pixel_index + 2], 0);
+    }
+
+    #[test]
+    fn clips_scrolled_content_below_chrome() {
+        let text_rasterizer = TextRasterizer::load();
+        let scale = 1;
+        let display_list = DisplayList {
+            width: 120,
+            height: 300,
+            commands: vec![DisplayCommand::FillRect {
+                x: 10,
+                y: 0,
+                width: 40,
+                height: 40,
+                color: Color::rgb(255, 0, 0),
+            }],
+            link_regions: Vec::new(),
+            background: Color::rgb(255, 255, 255),
+        };
+
+        let mut frame = vec![255_u8; (220 * 220 * 4) as usize];
+        rasterize(&text_rasterizer, &display_list, &mut frame, 220, 220, 25, scale);
+
+        let chrome_pixel_index = (((chrome_height(scale) - 4) * 220 + 48) * 4) as usize;
+        assert_eq!(frame[chrome_pixel_index], 255);
+        assert_eq!(frame[chrome_pixel_index + 1], 255);
+        assert_eq!(frame[chrome_pixel_index + 2], 255);
+
+        let content_pixel_y = chrome_height(scale) + top_margin(scale) + 2;
+        let content_pixel_index = ((content_pixel_y * 220 + 48) * 4) as usize;
+        assert_eq!(frame[content_pixel_index], 255);
+        assert_eq!(frame[content_pixel_index + 1], 0);
+        assert_eq!(frame[content_pixel_index + 2], 0);
     }
 
     #[test]
