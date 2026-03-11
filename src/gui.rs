@@ -8,7 +8,7 @@ use crate::style;
 use font8x8::UnicodeFonts;
 use fontdb::{Database, Family, Query, Style, Weight};
 use fontdue::{Font, FontSettings};
-use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
+use fontdue::layout::{CoordinateSystem, GlyphPosition, Layout, LayoutSettings, TextStyle};
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -69,6 +69,16 @@ struct GuiApp {
     text_rasterizer: TextRasterizer,
     clipboard: Option<Clipboard>,
     address_blink_started_at: Instant,
+}
+
+struct AddressTextLayout {
+    display_text: String,
+    font_size: usize,
+    text_x: i32,
+    text_y: i32,
+    prefix_len_bytes: usize,
+    address_input_len_bytes: usize,
+    glyphs: Option<Vec<GlyphPosition>>,
 }
 
 impl GuiApp {
@@ -572,6 +582,18 @@ impl TextRasterizer {
             .fold(0.0, f32::max)
             .ceil() as i32
     }
+
+    fn layout_text_glyphs(
+        &self,
+        text: &str,
+        font_weight: crate::style::FontWeight,
+        font_size: usize,
+        x: i32,
+        y: i32,
+    ) -> Option<Vec<GlyphPosition>> {
+        let font = self.font_for_weight(font_weight)?;
+        Some(layout_text_glyphs(font, text, font_size as f32, x, y))
+    }
 }
 
 impl TextMeasurer for TextRasterizer {
@@ -963,29 +985,19 @@ fn draw_chrome(
         },
     );
 
-    let text_x = (address_bar_padding(scale) + 8 * scale) as i32;
-    let text_y = (20 * scale) as i32;
-    let font_size = 17usize.saturating_mul(scale as usize);
-    let prefix = if address_focus { "> " } else { "" };
-    let prefix_width = text_rasterizer.exact_text_width(
-        prefix,
-        crate::style::FontWeight::Normal,
-        font_size,
+    let layout = build_address_text_layout(
+        text_rasterizer,
+        address_input,
+        preedit_text,
+        address_focus,
+        scale,
     );
 
     if let Some((start, end)) = address_selection {
-        let selection_x = text_x
-            + prefix_width
-            + text_rasterizer.exact_text_width(
-                &address_slice(address_input, 0, start),
-                crate::style::FontWeight::Normal,
-                font_size,
-            );
-        let selection_width = text_rasterizer.exact_text_width(
-            &address_slice(address_input, start, end),
-            crate::style::FontWeight::Normal,
-            font_size,
-        );
+        let selection_x = layout.x_for_char_index(text_rasterizer, start);
+        let selection_width = layout
+            .x_for_char_index(text_rasterizer, end)
+            .saturating_sub(selection_x);
         draw_rect(
             frame,
             width,
@@ -998,19 +1010,13 @@ fn draw_chrome(
         );
     }
 
-    let display_text = format!(
-        "{}{}{}",
-        if address_focus { "> " } else { "" },
-        address_input,
-        preedit_text
-    );
     text_rasterizer.draw_text(
         frame,
         width,
         height,
-        text_x,
-        text_y,
-        &display_text,
+        layout.text_x,
+        layout.text_y,
+        &layout.display_text,
         Color::rgb(32, 35, 40),
         crate::style::FontWeight::Normal,
         17.0 * scale as f32,
@@ -1019,13 +1025,7 @@ fn draw_chrome(
     );
 
     if address_focus && caret_visible {
-        let caret_x = text_x
-            + prefix_width
-            + text_rasterizer.exact_text_width(
-                &address_slice(address_input, 0, address_cursor),
-                crate::style::FontWeight::Normal,
-                font_size,
-            );
+        let caret_x = layout.x_for_char_index(text_rasterizer, address_cursor);
         draw_rect(
             frame,
             width,
@@ -1289,22 +1289,7 @@ fn draw_text_fontdue(
     clip_top: Option<i32>,
     clip_bottom: Option<i32>,
 ) {
-    let fonts = [font];
-    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
-    let line_height = if font_size >= 28.0 {
-        1.1
-    } else {
-        1.35
-    };
-    layout.reset(&LayoutSettings {
-        x: x as f32,
-        y: y as f32,
-        line_height,
-        ..LayoutSettings::default()
-    });
-    layout.append(&fonts, &TextStyle::new(text, font_size, 0));
-
-    for glyph in layout.glyphs() {
+    for glyph in layout_text_glyphs(font, text, font_size, x, y) {
         let (metrics, bitmap) = font.rasterize_config(glyph.key);
         let glyph_y = glyph.y.round() as i32;
         if clip_top.is_some_and(|top| glyph_y + metrics.height as i32 <= top)
@@ -1326,6 +1311,26 @@ fn draw_text_fontdue(
             clip_bottom,
         );
     }
+}
+
+fn layout_text_glyphs(
+    font: &Font,
+    text: &str,
+    font_size: f32,
+    x: i32,
+    y: i32,
+) -> Vec<GlyphPosition> {
+    let fonts = [font];
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    let line_height = if font_size >= 28.0 { 1.1 } else { 1.35 };
+    layout.reset(&LayoutSettings {
+        x: x as f32,
+        y: y as f32,
+        line_height,
+        ..LayoutSettings::default()
+    });
+    layout.append(&fonts, &TextStyle::new(text, font_size, 0));
+    layout.glyphs().clone()
 }
 
 fn draw_glyph_bitmap(
@@ -1488,6 +1493,87 @@ fn address_slice(text: &str, start: usize, end: usize) -> String {
     text[start_byte..end_byte].to_string()
 }
 
+fn build_address_text_layout(
+    text_rasterizer: &TextRasterizer,
+    address_input: &str,
+    preedit_text: &str,
+    address_focus: bool,
+    scale: u32,
+) -> AddressTextLayout {
+    let text_x = (address_bar_padding(scale) + 8 * scale) as i32;
+    let text_y = (20 * scale) as i32;
+    let prefix = if address_focus { "> " } else { "" };
+    let display_text = format!("{prefix}{address_input}{preedit_text}");
+    let font_size = 17usize.saturating_mul(scale as usize);
+    let glyphs = text_rasterizer.layout_text_glyphs(
+        &display_text,
+        crate::style::FontWeight::Normal,
+        font_size,
+        text_x,
+        text_y,
+    );
+
+    AddressTextLayout {
+        display_text,
+        font_size,
+        text_x,
+        text_y,
+        prefix_len_bytes: prefix.len(),
+        address_input_len_bytes: address_input.len(),
+        glyphs,
+    }
+}
+
+impl AddressTextLayout {
+    fn address_byte_offset_for_char_index(&self, address_input: &str, char_index: usize) -> usize {
+        self.prefix_len_bytes + address_byte_index(address_input, char_index)
+    }
+
+    fn x_for_byte_offset(&self, text_rasterizer: &TextRasterizer, byte_offset: usize) -> i32 {
+        if let Some(glyphs) = &self.glyphs {
+            let mut trailing_x = self.text_x;
+            for glyph in glyphs {
+                if glyph.byte_offset >= byte_offset {
+                    return glyph.x.round() as i32;
+                }
+                trailing_x = (glyph.x + glyph.width as f32).round() as i32;
+            }
+            return trailing_x;
+        }
+
+        let prefix = &self.display_text[..byte_offset.min(self.display_text.len())];
+        self.text_x
+            + text_rasterizer.exact_text_width(
+                prefix,
+                crate::style::FontWeight::Normal,
+                self.font_size,
+            )
+    }
+
+    fn x_for_char_index(&self, text_rasterizer: &TextRasterizer, char_index: usize) -> i32 {
+        let address_only = &self.display_text[self.prefix_len_bytes
+            ..self.prefix_len_bytes + self.address_input_len_bytes];
+        let byte_offset = self.address_byte_offset_for_char_index(address_only, char_index);
+        self.x_for_byte_offset(text_rasterizer, byte_offset)
+    }
+
+    fn char_index_from_x(&self, text_rasterizer: &TextRasterizer, x: f64) -> usize {
+        let address_only = &self.display_text[self.prefix_len_bytes
+            ..self.prefix_len_bytes + self.address_input_len_bytes];
+        let char_count = address_only.chars().count();
+
+        for index in 0..char_count {
+            let current_x = self.x_for_char_index(text_rasterizer, index) as f64;
+            let next_x = self.x_for_char_index(text_rasterizer, index + 1) as f64;
+            if x <= current_x + ((next_x - current_x) / 2.0) {
+                return index;
+            }
+        }
+
+        char_count
+    }
+}
+
 fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32, scale: u32) -> bool {
     let min_x = address_bar_padding(scale) as f64;
     let max_x = viewport_width.saturating_sub(address_bar_padding(scale)) as f64;
@@ -1502,33 +1588,8 @@ fn address_bar_cursor_from_position(
     x: f64,
     scale: u32,
 ) -> usize {
-    let font_size = 17usize.saturating_mul(scale as usize);
-    let text_origin = (address_bar_padding(scale) + 8 * scale) as f64;
-    let prefix_width = text_rasterizer.exact_text_width(
-        "> ",
-        crate::style::FontWeight::Normal,
-        font_size,
-    ) as f64;
-    let relative_x = (x - text_origin - prefix_width).max(0.0);
-    let char_count = text.chars().count();
-
-    for index in 0..char_count {
-        let current_width = text_rasterizer.exact_text_width(
-            &address_slice(text, 0, index),
-            crate::style::FontWeight::Normal,
-            font_size,
-        ) as f64;
-        let next_width = text_rasterizer.exact_text_width(
-            &address_slice(text, 0, index + 1),
-            crate::style::FontWeight::Normal,
-            font_size,
-        ) as f64;
-        if relative_x <= current_width + ((next_width - current_width) / 2.0) {
-            return index;
-        }
-    }
-
-    char_count
+    let layout = build_address_text_layout(text_rasterizer, text, "", true, scale);
+    layout.char_index_from_x(text_rasterizer, x)
 }
 
 fn link_hit_test(
