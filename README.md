@@ -54,6 +54,10 @@ GUI controls:
 - `PageUp` / `PageDown`: page scroll
 - `Home` / `End`: jump to top/bottom
 - `Cmd+L` / `Ctrl+L`: focus address bar
+- `Cmd+A` / `Ctrl+A`: select whole address
+- `Cmd+C` / `Ctrl+C`: copy address
+- `Cmd+X` / `Ctrl+X`: cut address
+- `Cmd+V` / `Ctrl+V`: paste into address bar
 - `Enter`: load typed path or URL
 - `Esc`: cancel address editing
 - `R`: reload current page

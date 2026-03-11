@@ -1,3 +1,4 @@
+use arboard::Clipboard;
 use crate::html;
 use crate::layout;
 use crate::layout::TextMeasurer;
@@ -48,6 +49,7 @@ struct GuiApp {
     current_source: String,
     address_input: String,
     address_focus: bool,
+    address_select_all: bool,
     preedit_text: String,
     status_message: Option<String>,
     title: String,
@@ -61,6 +63,7 @@ struct GuiApp {
     modifiers: ModifiersState,
     cursor_position: Option<PhysicalPosition<f64>>,
     text_rasterizer: TextRasterizer,
+    clipboard: Option<Clipboard>,
 }
 
 impl GuiApp {
@@ -73,6 +76,7 @@ impl GuiApp {
             current_source: initial_source.to_string(),
             address_input: initial_source.to_string(),
             address_focus: false,
+            address_select_all: false,
             preedit_text: String::new(),
             status_message: Some(
                 "Click or Cmd/Ctrl+L to edit address, Enter to load".to_string(),
@@ -87,6 +91,7 @@ impl GuiApp {
             modifiers: ModifiersState::empty(),
             cursor_position: None,
             text_rasterizer,
+            clipboard: Clipboard::new().ok(),
         }
     }
 
@@ -106,6 +111,7 @@ impl GuiApp {
             &self.address_input,
             &self.preedit_text,
             self.address_focus,
+            self.address_select_all,
             self.status_message.as_deref(),
         );
         rasterize(
@@ -130,10 +136,99 @@ impl GuiApp {
 
     fn set_address_focus(&mut self, focused: bool) {
         self.address_focus = focused;
+        if !focused {
+            self.address_select_all = false;
+        }
         self.preedit_text.clear();
         if let Some(window) = self.window.as_ref() {
             window.set_ime_allowed(focused);
         }
+    }
+
+    fn select_all_address(&mut self) {
+        self.address_select_all = true;
+    }
+
+    fn replace_or_append_address_text(&mut self, text: &str) {
+        if self.address_select_all {
+            self.address_input.clear();
+            self.address_select_all = false;
+        }
+        self.address_input.push_str(text);
+    }
+
+    fn delete_from_address(&mut self) {
+        if self.address_select_all {
+            self.address_input.clear();
+            self.address_select_all = false;
+        } else {
+            self.address_input.pop();
+        }
+    }
+
+    fn copy_address_to_clipboard(&mut self) -> Result<(), String> {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return Err("clipboard is unavailable".to_string());
+        };
+        clipboard
+            .set_text(self.address_input.clone())
+            .map_err(|err| format!("failed to copy address: {err}"))
+    }
+
+    fn paste_address_from_clipboard(&mut self) -> Result<(), String> {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return Err("clipboard is unavailable".to_string());
+        };
+        let text = clipboard
+            .get_text()
+            .map_err(|err| format!("failed to read clipboard: {err}"))?;
+        let sanitized = sanitize_clipboard_text(&text);
+        if sanitized.is_empty() {
+            return Ok(());
+        }
+        self.replace_or_append_address_text(&sanitized);
+        Ok(())
+    }
+
+    fn handle_address_shortcut(&mut self, text: &str) -> bool {
+        if !(self.modifiers.control_key() || self.modifiers.super_key()) {
+            return false;
+        }
+
+        if text.eq_ignore_ascii_case("a") {
+            self.select_all_address();
+            self.status_message = Some("Address selected".to_string());
+            return true;
+        }
+
+        if text.eq_ignore_ascii_case("c") {
+            self.status_message = Some(match self.copy_address_to_clipboard() {
+                Ok(()) => "Address copied".to_string(),
+                Err(err) => err,
+            });
+            return true;
+        }
+
+        if text.eq_ignore_ascii_case("x") {
+            let copied = self.copy_address_to_clipboard();
+            self.address_input.clear();
+            self.address_select_all = false;
+            self.status_message = Some(match copied {
+                Ok(()) => "Address cut".to_string(),
+                Err(err) => err,
+            });
+            return true;
+        }
+
+        if text.eq_ignore_ascii_case("v") {
+            self.status_message = Some(match self.paste_address_from_clipboard() {
+                Ok(()) => "Address pasted".to_string(),
+                Err(err) => err,
+            });
+            return true;
+        }
+
+        false
     }
 
     fn relayout_current_page(&mut self) {
@@ -168,6 +263,7 @@ impl GuiApp {
                 self.page = page;
                 self.current_source = source_input.clone();
                 self.address_input = source_input.clone();
+                self.address_select_all = false;
                 self.title = source_input;
                 self.scroll_y = 0;
                 self.status_message = Some("Page loaded".to_string());
@@ -200,6 +296,7 @@ impl GuiApp {
         );
         if focused {
             self.set_address_focus(true);
+            self.address_select_all = false;
             self.status_message = Some("Editing address".to_string());
         } else if let Some(target) = link_hit_test(
             &self.page.display_list,
@@ -386,7 +483,7 @@ impl ApplicationHandler for GuiApp {
             }
             WindowEvent::Ime(event) => match event {
                 Ime::Commit(text) if self.address_focus => {
-                    self.address_input.push_str(&text);
+                    self.replace_or_append_address_text(&text);
                     self.preedit_text.clear();
                     self.request_redraw();
                 }
@@ -448,12 +545,20 @@ impl ApplicationHandler for GuiApp {
                 {
                     self.set_address_focus(true);
                     self.address_input = self.current_source.clone();
+                    self.select_all_address();
                     self.status_message = Some("Editing address".to_string());
                     self.request_redraw();
                     return;
                 }
 
                 if self.address_focus {
+                    if let Key::Character(text) = event.logical_key.as_ref() {
+                        if self.handle_address_shortcut(text) {
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+
                     match event.logical_key.as_ref() {
                         Key::Named(NamedKey::Enter) => {
                             let requested = self.address_input.trim().to_string();
@@ -468,13 +573,13 @@ impl ApplicationHandler for GuiApp {
                             self.request_redraw();
                         }
                         Key::Named(NamedKey::Backspace) => {
-                            self.address_input.pop();
+                            self.delete_from_address();
                             self.request_redraw();
                         }
                         Key::Character(text)
                             if !(self.modifiers.control_key() || self.modifiers.super_key()) =>
                         {
-                            self.address_input.push_str(text);
+                            self.replace_or_append_address_text(text);
                             self.request_redraw();
                         }
                         _ => {}
@@ -626,6 +731,7 @@ fn draw_chrome(
     address_input: &str,
     preedit_text: &str,
     address_focus: bool,
+    address_select_all: bool,
     status_message: Option<&str>,
 ) {
     draw_rect(
@@ -652,6 +758,20 @@ fn draw_chrome(
             Color::rgb(246, 243, 236)
         },
     );
+
+    if address_focus && address_select_all {
+        draw_rect(
+            frame,
+            width,
+            height,
+            (address_bar_padding(scale) + 6 * scale) as i32,
+            (14 * scale) as i32,
+            width
+                .saturating_sub(address_bar_padding(scale) * 2 + 12 * scale) as i32,
+            address_bar_height(scale).saturating_sub(4 * scale) as i32,
+            Color::rgb(205, 222, 246),
+        );
+    }
 
     let display_text = format!(
         "{}{}{}",
@@ -1163,6 +1283,10 @@ fn scaled(value: u32, scale: u32) -> u32 {
     value.saturating_mul(scale.max(1))
 }
 
+fn sanitize_clipboard_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn clamp_scroll(scroll_y: u32, content_height: u32, viewport_height: u32) -> u32 {
     scroll_y.min(content_height.saturating_sub(viewport_height))
 }
@@ -1185,8 +1309,8 @@ fn apply_scroll_delta(
 mod tests {
     use super::{
         address_bar_hit_test, apply_scroll_delta, chrome_height, clamp_scroll,
-        content_scale_for_viewport, link_hit_test, load_page, rasterize, top_margin,
-        TextRasterizer,
+        content_scale_for_viewport, link_hit_test, load_page, rasterize, sanitize_clipboard_text,
+        top_margin, GuiApp, TextRasterizer,
     };
     use crate::paint::{Color, DisplayCommand, DisplayList, LinkRegion};
 
@@ -1308,5 +1432,28 @@ mod tests {
             .expect("fixture should load");
         assert!(!page.display_list.commands.is_empty());
         assert!(!page.display_list.link_regions.is_empty());
+    }
+
+    #[test]
+    fn sanitizes_clipboard_text_for_address_bar() {
+        assert_eq!(
+            sanitize_clipboard_text(" https://example.com/\npath\t?q=1 "),
+            "https://example.com/ path ?q=1"
+        );
+    }
+
+    #[test]
+    fn replacing_selected_address_text_overwrites_existing_value() {
+        let text_rasterizer = TextRasterizer::load();
+        let page = load_page("examples/welcome.html", 960, 720, 1.0, &text_rasterizer)
+            .expect("fixture should load");
+        let mut app = GuiApp::new(page, "examples/welcome.html", text_rasterizer);
+        app.address_input = "https://old.example".to_string();
+        app.address_select_all = true;
+
+        app.replace_or_append_address_text("https://new.example");
+
+        assert_eq!(app.address_input, "https://new.example");
+        assert!(!app.address_select_all);
     }
 }
