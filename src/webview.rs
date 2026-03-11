@@ -9,6 +9,7 @@ use fontdue::{Font, FontSettings};
 use pixels::{Pixels, SurfaceTexture};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use url::Url;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, Ime, MouseButton, WindowEvent};
@@ -753,11 +754,30 @@ impl WebViewApp {
 }
 
 fn should_ignore_navigation_for_tab(tab: &TabState, url: &str) -> bool {
-    is_internal_about_url(url) && !is_internal_about_url(&tab.current_url) && !tab.source.is_empty()
+    (is_internal_about_url(url)
+        && !is_internal_about_url(&tab.current_url)
+        && !tab.source.is_empty())
+        || is_cloudflare_challenge_url_for_other_host(tab, url)
 }
 
 fn is_internal_about_url(url: &str) -> bool {
     url == "about:blank" || url.starts_with("about:srcdoc")
+}
+
+fn is_cloudflare_challenge_url_for_other_host(tab: &TabState, url: &str) -> bool {
+    let Ok(candidate) = Url::parse(url) else {
+        return false;
+    };
+    if candidate.host_str() != Some("challenges.cloudflare.com")
+        || !candidate.path().starts_with("/cdn-cgi/challenge-platform/")
+    {
+        return false;
+    }
+
+    let current_host = Url::parse(&tab.current_url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string));
+    current_host.as_deref() != Some("challenges.cloudflare.com")
 }
 
 impl ApplicationHandler<BrowserEvent> for WebViewApp {
@@ -2019,6 +2039,10 @@ mod tests {
         assert!(!should_ignore_navigation_for_tab(
             &tab,
             "https://example.com/next"
+        ));
+        assert!(should_ignore_navigation_for_tab(
+            &tab,
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/f/ov2/av0/rch/test/0x4AAAAA/auto/fbE/new/normal?lang=auto"
         ));
     }
 
