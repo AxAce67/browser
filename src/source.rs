@@ -1,8 +1,17 @@
+use reqwest::blocking::Client;
+use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE};
+use reqwest::redirect::Policy;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use url::Url;
 
 pub const DEFAULT_SOURCE: &str = "examples/welcome.html";
+const REQUEST_TIMEOUT_SECS: u64 = 15;
+const MAX_REDIRECTS: usize = 10;
+const BROWSER_USER_AGENT: &str = "ToyBrowser/0.1 (+https://github.com/AxAce67/browser)";
+const ACCEPT_HEADER: &str =
+    "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceOrigin {
@@ -19,20 +28,7 @@ pub fn load_html(source: Option<&str>) -> Result<(String, PathBuf), String> {
 
             Ok((html, path))
         }
-        SourceOrigin::Remote(url) => {
-            let response = reqwest::blocking::get(&url)
-                .map_err(|err| format!("failed to fetch HTML from {url}: {err}"))?;
-            let status = response.status();
-            if !status.is_success() {
-                return Err(format!("request to {url} failed with status {status}"));
-            }
-
-            let html = response
-                .text()
-                .map_err(|err| format!("failed to decode HTML from {url}: {err}"))?;
-
-            Ok((html, PathBuf::from(url)))
-        }
+        SourceOrigin::Remote(url) => fetch_remote_html(&url),
     }
 }
 
@@ -75,9 +71,77 @@ pub fn resolve_reference(current_source: &str, target: &str) -> String {
         .to_string()
 }
 
+fn fetch_remote_html(url: &str) -> Result<(String, PathBuf), String> {
+    let client = build_http_client()?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|err| format!("failed to fetch HTML from {url}: {err}"))?;
+
+    let status = response.status();
+    let final_url = response.url().to_string();
+    if !status.is_success() {
+        return Err(format!(
+            "request to {final_url} failed with status {status}"
+        ));
+    }
+
+    if let Some(content_type) = response.headers().get(CONTENT_TYPE) {
+        let content_type = content_type.to_str().unwrap_or_default();
+        if !supports_text_response(content_type) {
+            return Err(format!(
+                "unsupported content type from {final_url}: {content_type}"
+            ));
+        }
+    }
+
+    let html = response
+        .text()
+        .map_err(|err| format!("failed to decode HTML from {final_url}: {err}"))?;
+
+    Ok((html, PathBuf::from(final_url)))
+}
+
+fn build_http_client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .redirect(Policy::limited(MAX_REDIRECTS))
+        .user_agent(BROWSER_USER_AGENT)
+        .default_headers(default_request_headers())
+        .build()
+        .map_err(|err| format!("failed to build HTTP client: {err}"))
+}
+
+fn default_request_headers() -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(ACCEPT, ACCEPT_HEADER.parse().expect("valid accept header"));
+    headers.insert(
+        ACCEPT_LANGUAGE,
+        "en-US,en;q=0.9".parse().expect("valid accept-language header"),
+    );
+    headers
+}
+
+fn supports_text_response(content_type: &str) -> bool {
+    let normalized = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+
+    normalized.starts_with("text/html")
+        || normalized.starts_with("application/xhtml+xml")
+        || normalized.starts_with("text/plain")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{classify_source, load_html, resolve_reference, SourceOrigin, DEFAULT_SOURCE};
+    use super::{
+        classify_source, load_html, resolve_reference, supports_text_response, SourceOrigin,
+        DEFAULT_SOURCE,
+    };
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::path::{Path, PathBuf};
@@ -113,11 +177,15 @@ mod tests {
 
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept request");
-            let mut buffer = [0_u8; 1024];
+            let mut buffer = [0_u8; 2048];
             let _ = stream.read(&mut buffer);
+            let request = String::from_utf8_lossy(&buffer).to_ascii_lowercase();
+            assert!(request.contains("user-agent: toybrowser/0.1"));
+            assert!(request.contains("accept: text/html"));
+
             let body = "<html><body><p>remote fixture</p></body></html>";
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{}",
                 body.len(),
                 body
             );
@@ -132,6 +200,54 @@ mod tests {
         assert_eq!(path, PathBuf::from(url));
 
         handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn follows_redirects_and_returns_final_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("read local addr");
+
+        let handle = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut buffer = [0_u8; 1024];
+                let bytes_read = stream.read(&mut buffer).expect("read request");
+                let request = String::from_utf8_lossy(&buffer[..bytes_read]);
+
+                if request.starts_with("GET /start ") {
+                    let response = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://{address}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write redirect");
+                } else {
+                    let body = "<html><body>redirected</body></html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write final response");
+                }
+            }
+        });
+
+        let start_url = format!("http://{address}/start");
+        let (html, path) = load_html(Some(&start_url)).expect("redirect should succeed");
+        assert!(html.contains("redirected"));
+        assert_eq!(path, PathBuf::from(format!("http://{address}/final")));
+
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn rejects_binary_content_types() {
+        assert!(supports_text_response("text/html; charset=utf-8"));
+        assert!(supports_text_response("application/xhtml+xml"));
+        assert!(!supports_text_response("application/pdf"));
     }
 
     #[test]

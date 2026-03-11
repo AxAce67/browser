@@ -8,6 +8,6 @@ font8x8 = "0.3"
 fontdb = "0.23"
 fontdue = "0.9"
 pixels = "0.15"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "brotli", "charset", "deflate", "gzip", "http2", "rustls-tls-native-roots"] }
 url = "2"
 winit = "0.30"
