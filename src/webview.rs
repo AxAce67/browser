@@ -53,6 +53,7 @@ enum BrowserEvent {
     NavigationStarted(String),
     PageFinished(String),
     TitleChanged(String),
+    TopLevelUrlResolved(String),
 }
 
 #[derive(Clone, Debug)]
@@ -704,6 +705,21 @@ impl WebViewApp {
                     self.clear_address_selection();
                 }
                 self.status_message = Some("Page loaded".to_string());
+                self.request_top_level_url();
+            }
+            BrowserEvent::TopLevelUrlResolved(url) => {
+                if self.should_ignore_navigation_event(&url) {
+                    return;
+                }
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.current_url = url.clone();
+                    tab.source = url.clone();
+                }
+                if !self.address_focus {
+                    self.address_input = url;
+                    self.address_cursor = self.address_char_count();
+                    self.clear_address_selection();
+                }
             }
             BrowserEvent::TitleChanged(title) => {
                 if let Some(tab) = self.active_tab_mut() {
@@ -721,6 +737,18 @@ impl WebViewApp {
         };
 
         should_ignore_navigation_for_tab(tab, url)
+    }
+
+    fn request_top_level_url(&self) {
+        let Some(webview) = self.webview.as_ref() else {
+            return;
+        };
+        let proxy = self.proxy.clone();
+        let _ = webview.evaluate_script_with_callback("window.location.href", move |value| {
+            if let Some(url) = parse_js_string_result(&value) {
+                let _ = proxy.send_event(BrowserEvent::TopLevelUrlResolved(url));
+            }
+        });
     }
 }
 
@@ -1891,13 +1919,57 @@ fn sanitize_clipboard_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn parse_js_string_result(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "null" || trimmed == "undefined" {
+        return None;
+    }
+
+    if let Some(stripped) = trimmed
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+    {
+        let mut decoded = String::new();
+        let mut chars = stripped.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                match chars.next() {
+                    Some('"') => decoded.push('"'),
+                    Some('\\') => decoded.push('\\'),
+                    Some('/') => decoded.push('/'),
+                    Some('b') => decoded.push('\u{0008}'),
+                    Some('f') => decoded.push('\u{000C}'),
+                    Some('n') => decoded.push('\n'),
+                    Some('r') => decoded.push('\r'),
+                    Some('t') => decoded.push('\t'),
+                    Some('u') => {
+                        let hex = chars.by_ref().take(4).collect::<String>();
+                        if let Ok(code) = u16::from_str_radix(&hex, 16) {
+                            if let Some(decoded_char) = char::from_u32(code as u32) {
+                                decoded.push(decoded_char);
+                            }
+                        }
+                    }
+                    Some(other) => decoded.push(other),
+                    None => break,
+                }
+            } else {
+                decoded.push(ch);
+            }
+        }
+        return Some(decoded);
+    }
+
+    Some(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         address_bar_cursor_from_position, address_bar_hit_test, address_slice,
         build_address_text_layout, nav_button_hit_test, new_tab_button_hit_test,
-        sanitize_clipboard_text, should_ignore_navigation_for_tab, tab_close_hit_test,
-        tab_hit_test, NavAction, TabState, TextRasterizer,
+        parse_js_string_result, sanitize_clipboard_text, should_ignore_navigation_for_tab,
+        tab_close_hit_test, tab_hit_test, NavAction, TabState, TextRasterizer,
     };
 
     #[test]
@@ -1948,6 +2020,19 @@ mod tests {
             &tab,
             "https://example.com/next"
         ));
+    }
+
+    #[test]
+    fn parses_js_string_results() {
+        assert_eq!(
+            parse_js_string_result("\"https://example.com/path\""),
+            Some("https://example.com/path".to_string())
+        );
+        assert_eq!(
+            parse_js_string_result("\"https:\\/\\/example.com\\/a\\n\""),
+            Some("https://example.com/a\n".to_string())
+        );
+        assert_eq!(parse_js_string_result("null"), None);
     }
 
     #[test]
