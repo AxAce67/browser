@@ -19,19 +19,21 @@ use winit::window::{Window, WindowId};
 use wry::dpi::{LogicalPosition as WryLogicalPosition, LogicalSize as WryLogicalSize};
 use wry::{NewWindowResponse, Rect, WebView, WebViewBuilder};
 
-const CHROME_HEIGHT: u32 = 112;
-const TAB_BAR_HEIGHT: u32 = 36;
+const CHROME_HEIGHT: u32 = 96;
+const TAB_BAR_HEIGHT: u32 = 42;
 const ADDRESS_BAR_HEIGHT: u32 = 34;
 const ADDRESS_BAR_PADDING: u32 = 12;
-const NAV_BUTTON_SIZE: u32 = 28;
+const NAV_BUTTON_SIZE: u32 = 30;
 const NAV_BUTTON_SPACING: u32 = 10;
 const NAV_BUTTON_MARGIN_LEFT: u32 = 12;
-const ADDRESS_BAR_LEFT_OFFSET: u32 = 118;
-const TAB_HEIGHT: u32 = 26;
+const ADDRESS_BAR_LEFT_OFFSET: u32 = 132;
+const STATUS_PILL_WIDTH: u32 = 148;
+const STATUS_PILL_GAP: u32 = 10;
+const TAB_HEIGHT: u32 = 30;
 const TAB_MIN_WIDTH: u32 = 160;
 const TAB_MAX_WIDTH: u32 = 220;
 const TAB_GAP: u32 = 8;
-const NEW_TAB_BUTTON_SIZE: u32 = 26;
+const NEW_TAB_BUTTON_SIZE: u32 = 28;
 const DEFAULT_VIEWPORT_WIDTH: u32 = 1200;
 const DEFAULT_VIEWPORT_HEIGHT: u32 = 820;
 const CARET_BLINK_INTERVAL: Duration = Duration::from_millis(530);
@@ -664,6 +666,7 @@ impl WebViewApp {
                 &self.text_rasterizer,
                 &self.address_input,
                 position.x,
+                self.viewport_width,
             );
             self.address_cursor = caret;
             self.clear_address_selection();
@@ -686,6 +689,7 @@ impl WebViewApp {
             &self.text_rasterizer,
             &self.address_input,
             position.x,
+            self.viewport_width,
         );
         if self.address_selection_anchor.is_none() {
             self.address_selection_anchor = Some(self.address_cursor);
@@ -1302,6 +1306,25 @@ fn draw_chrome(
     caret_visible: bool,
     status_message: Option<&str>,
 ) {
+    let chrome_background = Color::rgb(244, 240, 234);
+    let tab_strip_color = Color::rgb(47, 52, 63);
+    let toolbar_color = Color::rgb(232, 228, 220);
+    let active_tab_color = Color::rgb(249, 247, 243);
+    let inactive_tab_color = Color::rgb(103, 111, 126);
+    let toolbar_border = Color::rgb(214, 208, 198);
+    let button_fill = Color::rgb(250, 248, 245);
+    let button_border = Color::rgb(206, 199, 190);
+    let address_fill = if address_focus {
+        Color::rgb(255, 255, 255)
+    } else {
+        Color::rgb(248, 245, 241)
+    };
+    let address_border = if address_focus {
+        Color::rgb(108, 134, 198)
+    } else {
+        Color::rgb(210, 204, 196)
+    };
+
     draw_rect(
         frame,
         width,
@@ -1310,12 +1333,32 @@ fn draw_chrome(
         0,
         width as i32,
         CHROME_HEIGHT as i32,
-        Color::rgb(232, 228, 220),
+        chrome_background,
+    );
+    draw_rect(
+        frame,
+        width,
+        height,
+        0,
+        0,
+        width as i32,
+        TAB_BAR_HEIGHT as i32,
+        tab_strip_color,
+    );
+    draw_rect(
+        frame,
+        width,
+        height,
+        0,
+        TAB_BAR_HEIGHT as i32,
+        width as i32,
+        CHROME_HEIGHT.saturating_sub(TAB_BAR_HEIGHT) as i32,
+        toolbar_color,
     );
 
     for (index, tab) in tabs.iter().enumerate() {
         if let Some(rect) = tab_rect(index, width, tabs.len()) {
-            draw_rect(
+            draw_rounded_rect(
                 frame,
                 width,
                 height,
@@ -1323,12 +1366,25 @@ fn draw_chrome(
                 rect.y,
                 rect.width,
                 rect.height,
+                9,
                 if index == active_tab {
-                    Color::rgb(250, 248, 243)
+                    active_tab_color
                 } else {
-                    Color::rgb(223, 219, 210)
+                    inactive_tab_color
                 },
             );
+            if index == active_tab {
+                draw_rect(
+                    frame,
+                    width,
+                    height,
+                    rect.x + 1,
+                    rect.y + rect.height - 3,
+                    rect.width - 2,
+                    3,
+                    active_tab_color,
+                );
+            }
 
             let label = if tab.title.is_empty() {
                 "New Tab".to_string()
@@ -1345,9 +1401,13 @@ fn draw_chrome(
                 width,
                 height,
                 rect.x + 10,
-                rect.y + 6,
+                rect.y + 7,
                 &label,
-                Color::rgb(52, 56, 64),
+                if index == active_tab {
+                    Color::rgb(45, 50, 58)
+                } else {
+                    Color::rgb(232, 235, 242)
+                },
                 if index == active_tab {
                     FontWeight::Bold
                 } else {
@@ -1357,7 +1417,7 @@ fn draw_chrome(
             );
 
             let close_rect = tab_close_rect(index, width, tabs.len());
-            draw_rect(
+            draw_rounded_rect(
                 frame,
                 width,
                 height,
@@ -1365,28 +1425,33 @@ fn draw_chrome(
                 close_rect.y,
                 close_rect.width,
                 close_rect.height,
+                7,
                 if index == active_tab {
-                    Color::rgb(233, 228, 220)
+                    Color::rgb(236, 231, 223)
                 } else {
-                    Color::rgb(214, 209, 201)
+                    Color::rgb(88, 97, 113)
                 },
             );
             text_rasterizer.draw_text(
                 frame,
                 width,
                 height,
-                close_rect.x + 4,
+                close_rect.x + 3,
                 close_rect.y + 1,
-                "x",
-                Color::rgb(92, 96, 104),
+                "×",
+                if index == active_tab {
+                    Color::rgb(92, 96, 104)
+                } else {
+                    Color::rgb(248, 248, 249)
+                },
                 FontWeight::Bold,
-                12.0,
+                13.0,
             );
         }
     }
 
     let plus_rect = new_tab_button_rect(width);
-    draw_rect(
+    draw_rounded_rect(
         frame,
         width,
         height,
@@ -1394,16 +1459,17 @@ fn draw_chrome(
         plus_rect.y,
         plus_rect.width,
         plus_rect.height,
-        Color::rgb(246, 243, 236),
+        8,
+        Color::rgb(84, 93, 110),
     );
     text_rasterizer.draw_text(
         frame,
         width,
         height,
-        plus_rect.x + 8,
-        plus_rect.y + 5,
+        plus_rect.x + 7,
+        plus_rect.y + 4,
         "+",
-        Color::rgb(72, 76, 84),
+        Color::rgb(248, 248, 249),
         FontWeight::Bold,
         18.0,
     );
@@ -1416,12 +1482,12 @@ fn draw_chrome(
         TAB_BAR_HEIGHT as i32,
         width as i32,
         1,
-        Color::rgb(210, 205, 196),
+        Color::rgb(78, 84, 96),
     );
 
     for action in [NavAction::Back, NavAction::Forward, NavAction::Reload] {
         let rect = nav_button_rect(action);
-        draw_rect(
+        draw_rounded_rect(
             frame,
             width,
             height,
@@ -1429,17 +1495,34 @@ fn draw_chrome(
             rect.y,
             rect.width,
             rect.height,
+            15,
             if is_loading && matches!(action, NavAction::Reload) {
-                Color::rgb(224, 232, 248)
+                Color::rgb(218, 228, 247)
             } else {
-                Color::rgb(246, 243, 236)
+                button_fill
+            },
+        );
+        draw_rounded_border(
+            frame,
+            width,
+            height,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+            15,
+            1,
+            if is_loading && matches!(action, NavAction::Reload) {
+                Color::rgb(139, 164, 210)
+            } else {
+                button_border
             },
         );
 
         let symbol = match action {
-            NavAction::Back => "<",
-            NavAction::Forward => ">",
-            NavAction::Reload => "R",
+            NavAction::Back => "←",
+            NavAction::Forward => "→",
+            NavAction::Reload => "↻",
         };
         let symbol_color = if is_loading && matches!(action, NavAction::Reload) {
             Color::rgb(36, 88, 164)
@@ -1450,32 +1533,41 @@ fn draw_chrome(
             frame,
             width,
             height,
-            rect.x + 9,
-            rect.y + 6,
+            rect.x + 7,
+            rect.y + 5,
             symbol,
             symbol_color,
             FontWeight::Bold,
-            16.0,
+            15.0,
         );
     }
 
-    draw_rect(
+    let address_rect = address_bar_rect(width);
+    draw_rounded_rect(
         frame,
         width,
         height,
-        ADDRESS_BAR_LEFT_OFFSET as i32,
-        nav_row_y() as i32 + 4,
-        width.saturating_sub(ADDRESS_BAR_LEFT_OFFSET + ADDRESS_BAR_PADDING) as i32,
-        ADDRESS_BAR_HEIGHT as i32,
-        if address_focus {
-            Color::rgb(255, 255, 255)
-        } else {
-            Color::rgb(246, 243, 236)
-        },
+        address_rect.x,
+        address_rect.y,
+        address_rect.width,
+        address_rect.height,
+        17,
+        address_fill,
+    );
+    draw_rounded_border(
+        frame,
+        width,
+        height,
+        address_rect.x,
+        address_rect.y,
+        address_rect.width,
+        address_rect.height,
+        17,
+        1,
+        address_border,
     );
 
-    let layout =
-        build_address_text_layout(text_rasterizer, address_input, preedit_text, address_focus);
+    let layout = build_address_text_layout(text_rasterizer, address_input, preedit_text, width);
 
     if let Some((start, end)) = address_selection {
         let selection_x = layout.x_for_char_index(text_rasterizer, start);
@@ -1487,9 +1579,9 @@ fn draw_chrome(
             width,
             height,
             selection_x,
-            nav_row_y() as i32 + 6,
+            address_rect.y + 4,
             selection_width.max(1),
-            ADDRESS_BAR_HEIGHT.saturating_sub(4) as i32,
+            address_rect.height - 8,
             Color::rgb(205, 222, 246),
         );
     }
@@ -1524,9 +1616,9 @@ fn draw_chrome(
             width,
             height,
             caret_x,
-            nav_row_y() as i32 + 8,
+            address_rect.y + 6,
             2,
-            ADDRESS_BAR_HEIGHT.saturating_sub(8) as i32,
+            address_rect.height - 12,
             Color::rgb(46, 50, 56),
         );
     }
@@ -1537,18 +1629,49 @@ fn draw_chrome(
         } else {
             message.to_string()
         };
+        let status_rect = status_chip_rect(width);
+        draw_rounded_rect(
+            frame,
+            width,
+            height,
+            status_rect.x,
+            status_rect.y,
+            status_rect.width,
+            status_rect.height,
+            12,
+            if is_loading {
+                Color::rgb(228, 235, 245)
+            } else {
+                Color::rgb(239, 235, 228)
+            },
+        );
         text_rasterizer.draw_text(
             frame,
             width,
             height,
-            (ADDRESS_BAR_PADDING + 8) as i32,
-            88,
+            status_rect.x + 10,
+            status_rect.y + 8,
             &rendered_message,
-            Color::rgb(96, 100, 110),
+            if is_loading {
+                Color::rgb(68, 89, 132)
+            } else {
+                Color::rgb(104, 101, 95)
+            },
             FontWeight::Normal,
-            13.0,
+            12.0,
         );
     }
+
+    draw_rect(
+        frame,
+        width,
+        height,
+        0,
+        CHROME_HEIGHT as i32 - 1,
+        width as i32,
+        1,
+        toolbar_border,
+    );
 }
 
 fn draw_rect(
@@ -1572,6 +1695,120 @@ fn draw_rect(
         for px in start_x..max_x {
             set_pixel(frame, width, height, px as i32, py as i32, color);
         }
+    }
+}
+
+fn draw_rounded_rect(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    rect_width: i32,
+    rect_height: i32,
+    radius: i32,
+    color: Color,
+) {
+    if rect_width <= 0 || rect_height <= 0 {
+        return;
+    }
+
+    for py in y.max(0)..(y + rect_height).min(height as i32) {
+        for px in x.max(0)..(x + rect_width).min(width as i32) {
+            if point_in_rounded_rect(px, py, x, y, rect_width, rect_height, radius) {
+                set_pixel(frame, width, height, px, py, color);
+            }
+        }
+    }
+}
+
+fn draw_rounded_border(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    x: i32,
+    y: i32,
+    rect_width: i32,
+    rect_height: i32,
+    radius: i32,
+    border_width: i32,
+    color: Color,
+) {
+    if border_width <= 0 {
+        return;
+    }
+    let inner_x = x + border_width;
+    let inner_y = y + border_width;
+    let inner_width = rect_width - border_width * 2;
+    let inner_height = rect_height - border_width * 2;
+    let inner_radius = (radius - border_width).max(0);
+
+    for py in y.max(0)..(y + rect_height).min(height as i32) {
+        for px in x.max(0)..(x + rect_width).min(width as i32) {
+            if !point_in_rounded_rect(px, py, x, y, rect_width, rect_height, radius) {
+                continue;
+            }
+            if inner_width > 0
+                && inner_height > 0
+                && point_in_rounded_rect(
+                    px,
+                    py,
+                    inner_x,
+                    inner_y,
+                    inner_width,
+                    inner_height,
+                    inner_radius,
+                )
+            {
+                continue;
+            }
+            set_pixel(frame, width, height, px, py, color);
+        }
+    }
+}
+
+fn point_in_rounded_rect(
+    px: i32,
+    py: i32,
+    x: i32,
+    y: i32,
+    rect_width: i32,
+    rect_height: i32,
+    radius: i32,
+) -> bool {
+    if rect_width <= 0 || rect_height <= 0 {
+        return false;
+    }
+
+    let radius = radius.max(0).min(rect_width / 2).min(rect_height / 2);
+    let local_x = px - x;
+    let local_y = py - y;
+    if local_x < 0 || local_y < 0 || local_x >= rect_width || local_y >= rect_height {
+        return false;
+    }
+
+    if radius == 0 {
+        return true;
+    }
+
+    if local_x < radius && local_y < radius {
+        let dx = radius - local_x - 1;
+        let dy = radius - local_y - 1;
+        dx * dx + dy * dy <= radius * radius
+    } else if local_x >= rect_width - radius && local_y < radius {
+        let dx = local_x - (rect_width - radius);
+        let dy = radius - local_y - 1;
+        dx * dx + dy * dy <= radius * radius
+    } else if local_x < radius && local_y >= rect_height - radius {
+        let dx = radius - local_x - 1;
+        let dy = local_y - (rect_height - radius);
+        dx * dx + dy * dy <= radius * radius
+    } else if local_x >= rect_width - radius && local_y >= rect_height - radius {
+        let dx = local_x - (rect_width - radius);
+        let dy = local_y - (rect_height - radius);
+        dx * dx + dy * dy <= radius * radius
+    } else {
+        true
     }
 }
 
@@ -1787,13 +2024,14 @@ fn build_address_text_layout(
     text_rasterizer: &TextRasterizer,
     address_input: &str,
     preedit_text: &str,
-    address_focus: bool,
+    viewport_width: u32,
 ) -> AddressTextLayout {
-    let text_x = (ADDRESS_BAR_LEFT_OFFSET + 8) as i32;
-    let text_y = nav_row_y() as i32 + 12;
-    let prefix = if address_focus { "> " } else { "" };
+    let rect = address_bar_rect(viewport_width);
+    let text_x = rect.x + 14;
+    let text_y = rect.y + 8;
+    let prefix = "";
     let display_text = format!("{prefix}{address_input}{preedit_text}");
-    let font_size = 17usize;
+    let font_size = 16usize;
     let glyphs = text_rasterizer
         .layout_text_glyphs(&display_text, FontWeight::Normal, font_size, text_x, text_y)
         .map(|mut glyphs| {
@@ -1866,10 +2104,11 @@ impl AddressTextLayout {
 }
 
 fn address_bar_hit_test(x: f64, y: f64, viewport_width: u32) -> bool {
-    let min_x = ADDRESS_BAR_LEFT_OFFSET as f64;
-    let max_x = viewport_width.saturating_sub(ADDRESS_BAR_PADDING) as f64;
-    let min_y = (nav_row_y() + 4) as f64;
-    let max_y = (nav_row_y() + 4 + ADDRESS_BAR_HEIGHT) as f64;
+    let rect = address_bar_rect(viewport_width);
+    let min_x = rect.x as f64;
+    let max_x = (rect.x + rect.width) as f64;
+    let min_y = rect.y as f64;
+    let max_y = (rect.y + rect.height) as f64;
     x >= min_x && x <= max_x && y >= min_y && y <= max_y
 }
 
@@ -1904,6 +2143,27 @@ fn nav_button_rect(action: NavAction) -> ButtonRect {
 
 fn nav_row_y() -> u32 {
     TAB_BAR_HEIGHT
+}
+
+fn address_bar_rect(viewport_width: u32) -> ButtonRect {
+    let right_padding = ADDRESS_BAR_PADDING + STATUS_PILL_WIDTH + STATUS_PILL_GAP;
+    ButtonRect {
+        x: ADDRESS_BAR_LEFT_OFFSET as i32,
+        y: nav_row_y() as i32 + 5,
+        width: viewport_width
+            .saturating_sub(ADDRESS_BAR_LEFT_OFFSET + right_padding)
+            .max(180) as i32,
+        height: ADDRESS_BAR_HEIGHT as i32,
+    }
+}
+
+fn status_chip_rect(viewport_width: u32) -> ButtonRect {
+    ButtonRect {
+        x: viewport_width.saturating_sub(ADDRESS_BAR_PADDING + STATUS_PILL_WIDTH) as i32,
+        y: nav_row_y() as i32 + 8,
+        width: STATUS_PILL_WIDTH as i32,
+        height: 28,
+    }
 }
 
 fn tab_rect(index: usize, viewport_width: u32, tab_count: usize) -> Option<ButtonRect> {
@@ -1972,7 +2232,7 @@ fn tab_close_hit_test(x: f64, y: f64, viewport_width: u32, tab_count: usize) -> 
 fn new_tab_button_rect(viewport_width: u32) -> ButtonRect {
     ButtonRect {
         x: viewport_width.saturating_sub(ADDRESS_BAR_PADDING + NEW_TAB_BUTTON_SIZE) as i32,
-        y: 6,
+        y: 7,
         width: NEW_TAB_BUTTON_SIZE as i32,
         height: NEW_TAB_BUTTON_SIZE as i32,
     }
@@ -2000,8 +2260,13 @@ fn nav_button_hit_test(x: f64, y: f64) -> Option<NavAction> {
     None
 }
 
-fn address_bar_cursor_from_position(text_rasterizer: &TextRasterizer, text: &str, x: f64) -> usize {
-    let layout = build_address_text_layout(text_rasterizer, text, "", true);
+fn address_bar_cursor_from_position(
+    text_rasterizer: &TextRasterizer,
+    text: &str,
+    x: f64,
+    viewport_width: u32,
+) -> usize {
+    let layout = build_address_text_layout(text_rasterizer, text, "", viewport_width);
     layout.char_index_from_x(text_rasterizer, x)
 }
 
@@ -2174,14 +2439,20 @@ mod tests {
     fn cursor_hit_testing_maps_points_to_character_indices() {
         let text_rasterizer = TextRasterizer::load();
         let text = "hello";
-        let start_x = (super::ADDRESS_BAR_LEFT_OFFSET + 8) as f64;
+        let viewport_width = 900;
+        let start_x = (super::address_bar_rect(viewport_width).x + 14) as f64;
 
         assert_eq!(
-            address_bar_cursor_from_position(&text_rasterizer, text, start_x + 2.0),
+            address_bar_cursor_from_position(&text_rasterizer, text, start_x + 2.0, viewport_width),
             0
         );
         assert_eq!(
-            address_bar_cursor_from_position(&text_rasterizer, text, start_x + 80.0),
+            address_bar_cursor_from_position(
+                &text_rasterizer,
+                text,
+                start_x + 80.0,
+                viewport_width
+            ),
             5
         );
     }
@@ -2189,7 +2460,7 @@ mod tests {
     #[test]
     fn address_layout_keeps_first_glyph_inside_padding() {
         let text_rasterizer = TextRasterizer::load();
-        let layout = build_address_text_layout(&text_rasterizer, "example.com", "", true);
+        let layout = build_address_text_layout(&text_rasterizer, "example.com", "", 900);
         if let Some(glyphs) = layout.glyphs.as_ref() {
             let min_x = glyphs
                 .iter()
