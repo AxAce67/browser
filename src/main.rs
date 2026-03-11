@@ -73,13 +73,14 @@ enum RunMode {
 }
 
 fn parse_args() -> Result<RunConfig, String> {
-    let mut mode = RunMode::Terminal;
+    let mut mode = RunMode::WebView;
     let mut source = None;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--gui" | "--toy" => mode = RunMode::ToyGui,
             "--webview" => mode = RunMode::WebView,
+            "--terminal" => mode = RunMode::Terminal,
             "--help" | "-h" => {
                 print_usage();
                 std::process::exit(0);
@@ -96,5 +97,5 @@ fn parse_args() -> Result<RunConfig, String> {
 }
 
 fn print_usage() {
-    eprintln!("Usage: cargo run -- [--gui|--toy|--webview] [source]");
+    eprintln!("Usage: cargo run -- [--webview|--gui|--toy|--terminal] [source]");
 }

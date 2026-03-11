@@ -40,13 +40,13 @@ core parsing and rendering flow stays explicit.
 
 ```bash
 cargo run
-cargo run -- examples/welcome.html
-cargo run -- https://example.com
-cargo run -- --gui
 cargo run -- --toy examples/welcome.html
 cargo run -- --webview
 cargo run -- --webview https://example.com
 cargo run -- --webview motherfuckingwebsite.com
+cargo run -- examples/welcome.html
+cargo run -- https://example.com
+cargo run -- --terminal examples/welcome.html
 cargo run -- --gui examples/welcome.html
 ```
 
