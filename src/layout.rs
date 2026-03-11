@@ -70,6 +70,38 @@ pub fn build_with_measurer(
             style: to_layout_style(node),
         },
         NodeType::Element(element) => {
+            if element.tag_name == "br" {
+                return LayoutBox {
+                    kind: LayoutKind::Block {
+                        tag_name: element.tag_name.clone(),
+                    },
+                    lines: vec![LayoutLine {
+                        fragments: vec![LayoutFragment {
+                            text: "\n".to_string(),
+                            width: 0,
+                            color: to_layout_style(node).color.clone(),
+                            font_weight: node.style.font_weight,
+                            underline: node.style.underline,
+                            font_size: node.style.font_size,
+                            line_height: node.style.line_height,
+                            href: None,
+                        }],
+                        width: 0,
+                        height: fragment_line_height(&LayoutFragment {
+                            text: "\n".to_string(),
+                            width: 0,
+                            color: to_layout_style(node).color.clone(),
+                            font_weight: node.style.font_weight,
+                            underline: node.style.underline,
+                            font_size: node.style.font_size,
+                            line_height: node.style.line_height,
+                            href: None,
+                        }),
+                    }],
+                    children: Vec::new(),
+                    style: to_layout_style(node),
+                };
+            }
             let mut children = Vec::new();
             let mut lines = Vec::new();
             let box_overhead = node.style.margin.horizontal() + node.style.padding.horizontal();
@@ -243,6 +275,19 @@ fn collect_inline_fragments(
             });
         }
         NodeType::Element(element) => {
+            if element.tag_name == "br" {
+                output.push(LayoutFragment {
+                    text: "\n".to_string(),
+                    width: 0,
+                    color: inherited_style.color.clone(),
+                    font_weight: inherited_style.font_weight,
+                    underline: false,
+                    font_size: inherited_style.font_size,
+                    line_height: inherited_style.line_height,
+                    href: None,
+                });
+                return;
+            }
             let style = merge_inline_style(inherited_style, &to_layout_style(node));
             let href = if element.tag_name == "a" {
                 attribute_value(element, "href")
@@ -279,6 +324,25 @@ fn wrap_fragments(
     let mut pending_space: Option<LayoutFragment> = None;
 
     for fragment in fragments {
+        if fragment.text == "\n" {
+            if !current_fragments.is_empty() {
+                lines.push(LayoutLine {
+                    fragments: std::mem::take(&mut current_fragments),
+                    width: current_width,
+                    height: current_height.max(1),
+                });
+            } else {
+                lines.push(LayoutLine {
+                    fragments: Vec::new(),
+                    width: 0,
+                    height: fragment_line_height(fragment),
+                });
+            }
+            current_width = 0;
+            current_height = 0;
+            pending_space = None;
+            continue;
+        }
         for token in tokenize_fragment(fragment) {
             if token.text.trim().is_empty() {
                 if !current_fragments.is_empty() {
@@ -540,6 +604,17 @@ mod tests {
         assert_eq!(layout.children[0].lines.len(), 1);
         assert_eq!(layout.children[0].lines[0].fragments.len(), 2);
         assert_eq!(layout.children[0].lines[0].fragments[1].href.as_deref(), Some("https://example.com"));
+    }
+
+    #[test]
+    fn breaks_lines_on_br_elements() {
+        let document = crate::html::parse(r#"<p>hello<br>world</p>"#);
+        let stylesheet = style::collect_stylesheets(&document);
+        let styled = style::style_tree(&document, &stylesheet);
+        let layout = build_with_measurer(&styled, 240, &MonospaceTextMeasurer);
+        assert_eq!(layout.children[0].lines.len(), 2);
+        assert_eq!(layout.children[0].lines[0].fragments[0].text, "hello");
+        assert_eq!(layout.children[0].lines[1].fragments[0].text, "world");
     }
 
     #[test]

@@ -162,8 +162,10 @@ fn default_style(node: &Node) -> ComputedStyle {
     match &node.node_type {
         NodeType::Element(element) => {
             style.display = match element.tag_name.as_str() {
-                "span" | "a" => Display::Inline,
-                "style" | "head" => Display::None,
+                "span" | "a" | "br" => Display::Inline,
+                "style" | "head" | "script" | "meta" | "link" | "title" | "noscript" => {
+                    Display::None
+                }
                 _ => Display::Block,
             };
 
@@ -203,6 +205,16 @@ fn default_style(node: &Node) -> ComputedStyle {
                 "div" => {
                     style.line_height = LineHeight::RelativePercent(150);
                     style.margin = EdgeSizes::vertical_horizontal(8, 0);
+                }
+                "blockquote" => {
+                    style.line_height = LineHeight::RelativePercent(155);
+                    style.margin = EdgeSizes::vertical_horizontal(16, 0);
+                    style.padding = EdgeSizes {
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                        left: 24,
+                    };
                 }
                 "ul" | "ol" => {
                     style.line_height = LineHeight::RelativePercent(150);
@@ -494,16 +506,22 @@ mod tests {
     #[test]
     fn hides_style_and_hidden_elements() {
         let document = crate::html::parse(
-            r#"<html><body><style>p { color: red; }</style><p hidden>secret</p></body></html>"#,
+            r#"<html><head><title>Hello</title><script>console.log(1)</script></head><body><style>p { color: red; }</style><p hidden>secret</p></body></html>"#,
         );
 
         let stylesheet = collect_stylesheets(&document);
         let styled = style_tree(&document, &stylesheet);
 
-        let style_node = &styled.children[0].children[0].children[0];
+        let title_node = &styled.children[0].children[0].children[0];
+        assert_eq!(title_node.style.display, Display::None);
+
+        let script_node = &styled.children[0].children[0].children[1];
+        assert_eq!(script_node.style.display, Display::None);
+
+        let style_node = &styled.children[0].children[1].children[0];
         assert_eq!(style_node.style.display, Display::None);
 
-        let hidden_paragraph = &styled.children[0].children[0].children[1];
+        let hidden_paragraph = &styled.children[0].children[1].children[1];
         assert_eq!(hidden_paragraph.style.display, Display::None);
         assert_eq!(hidden_paragraph.style.font_weight, FontWeight::Normal);
     }
