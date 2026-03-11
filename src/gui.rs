@@ -1591,7 +1591,20 @@ fn build_address_text_layout(
         font_size,
         text_x,
         text_y,
-    );
+    ).map(|mut glyphs| {
+        if let Some(min_x) = glyphs
+            .iter()
+            .map(|glyph| glyph.x.floor() as i32)
+            .min()
+            .filter(|min_x| *min_x < text_x)
+        {
+            let shift = (text_x - min_x) as f32;
+            for glyph in &mut glyphs {
+                glyph.x += shift;
+            }
+        }
+        glyphs
+    });
 
     AddressTextLayout {
         display_text,
@@ -1744,8 +1757,8 @@ mod tests {
     use super::{
         address_bar_cursor_from_position, address_bar_hit_test, address_slice,
         apply_scroll_delta, chrome_height, clamp_scroll,
-        content_scale_for_viewport, link_hit_test, load_page, rasterize, sanitize_clipboard_text,
-        top_margin, GuiApp, TextRasterizer,
+        build_address_text_layout, content_scale_for_viewport, link_hit_test, load_page,
+        rasterize, sanitize_clipboard_text, top_margin, GuiApp, TextRasterizer,
     };
     use crate::paint::{Color, DisplayCommand, DisplayList, LinkRegion};
 
@@ -1908,6 +1921,20 @@ mod tests {
             address_bar_cursor_from_position(&text_rasterizer, text, start_x + 80.0, 1),
             5
         );
+    }
+
+    #[test]
+    fn address_layout_keeps_first_glyph_inside_padding() {
+        let text_rasterizer = TextRasterizer::load();
+        let layout = build_address_text_layout(&text_rasterizer, "example.com", "", true, 1);
+        if let Some(glyphs) = layout.glyphs.as_ref() {
+            let min_x = glyphs
+                .iter()
+                .map(|glyph| glyph.x.floor() as i32)
+                .min()
+                .unwrap_or(layout.text_x);
+            assert!(min_x >= layout.text_x);
+        }
     }
 
     #[test]
